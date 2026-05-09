@@ -370,7 +370,7 @@ async def outreach_page(request: Request, db: Session = Depends(get_db)):
         .filter(
             Lead.status.in_([LeadStatus.NEW, LeadStatus.RESEARCHED]),
             Lead.status != LeadStatus.EXCLUDED,
-            Lead.lead_score >= 40,
+            Lead.lead_score >= 20,
             Lead.contact_email.isnot(None),
         )
         .order_by(desc(Lead.lead_score))
@@ -443,7 +443,7 @@ async def batch_send(
         .filter(
             Lead.status.in_([LeadStatus.NEW, LeadStatus.RESEARCHED]),
             Lead.status != LeadStatus.EXCLUDED,
-            Lead.lead_score >= 40,
+            Lead.lead_score >= 20,
             Lead.contact_email.isnot(None),
         )
         .order_by(desc(Lead.lead_score))
