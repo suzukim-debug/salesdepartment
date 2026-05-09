@@ -28,7 +28,7 @@ def _call_ai(system_msg: str, prompt: str) -> str:
         from google.genai import types
         client = genai.Client(api_key=settings.gemini_api_key)
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash-latest",
             contents=prompt,
             config=types.GenerateContentConfig(system_instruction=system_msg),
         )
