@@ -53,7 +53,7 @@
         {% endif %}
 
         {% if lead.outreach_logs %}
-        {% set latest = lead.outreach_logs | sort(attribute='sent_at', reverse=True) | first %}
+        {% set latest = lead.outreach_logs | selectattr('sent_at') | sort(attribute='sent_at', reverse=True) | first %}
         <div class="mt-1" style="font-size:11px; color:#888; border-top:1px solid #eee; padding-top:6px;">
           📧 {{ latest.sent_at.strftime('%m/%d') if latest.sent_at else '-' }}
           {% if latest.opened_at %}<span class="text-success ms-1">開封</span>{% endif %}

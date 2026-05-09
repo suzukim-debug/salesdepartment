@@ -40,7 +40,7 @@
                 {% endif %}
               </div>
               {% if lead.outreach_logs %}
-              {% set latest = lead.outreach_logs | sort(attribute='sent_at', reverse=True) | first %}
+              {% set latest = lead.outreach_logs | selectattr('sent_at') | sort(attribute='sent_at', reverse=True) | first %}
               <div style="font-size:11px; color:#888;" class="mt-1">
                 📧 送信: {{ latest.sent_at.strftime('%m/%d') if latest.sent_at else '-' }}
                 {% if latest.opened_at %} <span class="text-success">開封済</span>{% endif %}
