@@ -3,16 +3,18 @@ CSVからリードをインポートする
 対応フォーマット: UTF-8またはShift-JIS
 """
 import io
+import json
 import pandas as pd
-from datetime import datetime
 from sqlalchemy.orm import Session
 from database.models import Lead, LeadStatus
 from lead_generator.scorer import batch_score_leads
 
 
 COLUMN_MAP = {
-    # 会社名（多様な表記に対応）
+    # 会社名
     "会社名": "company_name",
+    "商号又は名称": "company_name",
+    "商号・名称": "company_name",
     "企業名": "company_name",
     "社名": "company_name",
     "店舗名": "company_name",
@@ -26,6 +28,8 @@ COLUMN_MAP = {
     "業種": "industry",
     "業態": "industry",
     "カテゴリ": "industry",
+    "ジャンル一覧": "industry",
+    "ジャンル": "industry",
     "industry": "industry",
     # 地域
     "都道府県": "prefecture",
@@ -33,13 +37,7 @@ COLUMN_MAP = {
     "住所": "address",
     "所在地": "address",
     "address": "address",
-    # 規模
-    "従業員数": "employee_count",
-    "従業員": "employee_count",
-    "employee_count": "employee_count",
-    "年商": "annual_revenue",
-    "売上": "annual_revenue",
-    "annual_revenue": "annual_revenue",
+    "郵便番号": "_postal",  # 住所に付加
     # ウェブサイト
     "URL": "website",
     "url": "website",
@@ -51,6 +49,7 @@ COLUMN_MAP = {
     # 担当者
     "担当者名": "contact_name",
     "担当者": "contact_name",
+    "フリガナ": "_skip",
     "contact_name": "contact_name",
     "役職": "contact_title",
     "contact_title": "contact_title",
@@ -73,9 +72,17 @@ COLUMN_MAP = {
     "phone": "company_phone",
     "Phone": "company_phone",
     "company_phone": "company_phone",
+    "携帯番号": "contact_phone",
     "担当者電話": "contact_phone",
     "contact_phone": "contact_phone",
-    # SNS
+    # 規模
+    "従業員数": "employee_count",
+    "従業員": "employee_count",
+    "employee_count": "employee_count",
+    "年商": "annual_revenue",
+    "売上": "annual_revenue",
+    "annual_revenue": "annual_revenue",
+    # SNS（bool）
     "Instagram": "has_instagram",
     "instagram": "has_instagram",
     "Twitter": "has_twitter",
@@ -111,6 +118,28 @@ COLUMN_MAP = {
     "exclude": "_exclude",
 }
 
+# 広告プラットフォーム消化額列（sns_raw_dataに保存）
+AD_SPEND_COLS = [
+    "予想消化額合計 (YouTube)",
+    "予想消化額合計 (TikTok)",
+    "予想消化額合計 (Shorts)",
+    "予想消化額合計 (Instagram)",
+    "予想消化額合計 (Facebook)",
+    "予想消化額合計 (Pangle)",
+    "予想消化額合計 (LAP)",
+    "予想消化額合計 (X)",
+    "予想消化額合計 (SmartNews)",
+    "予想消化額合計 (Yahoo)",
+    "予想消化額合計 (Pinterest)",
+    "予想消化額合計 (Google)",
+    "予想消化額合計 (Jimoty)",
+    "予想消化額合計 (Mercari)",
+    "予想消化額合計",
+    "予想消化額増加 (30日間)",
+    "クリエイティブ総数",
+    "商材一覧",
+]
+
 BOOL_TRUE_VALUES = {"yes", "true", "1", "あり", "○", "◯", "有", "✓", "✔"}
 
 
@@ -118,6 +147,13 @@ def _parse_bool(val) -> bool:
     if isinstance(val, bool):
         return val
     return str(val).strip().lower() in BOOL_TRUE_VALUES
+
+
+def _parse_num(val) -> float:
+    try:
+        return float(str(val).replace(",", "").replace("¥", "").strip())
+    except Exception:
+        return 0.0
 
 
 def import_from_csv(
@@ -140,10 +176,11 @@ def import_from_csv(
     df.columns = [c.strip() for c in df.columns]
 
     # 列名が一致しない場合、最初の列を会社名として自動認識
-    mapped_cols = {c for c in df.columns if c in COLUMN_MAP}
-    if not any(COLUMN_MAP.get(c) == "company_name" for c in mapped_cols):
-        first_col = df.columns[0]
-        COLUMN_MAP[first_col] = "company_name"
+    if not any(COLUMN_MAP.get(c) == "company_name" for c in df.columns):
+        COLUMN_MAP[df.columns[0]] = "company_name"
+
+    # 広告消化額列を検出
+    ad_cols_present = [c for c in df.columns if c in AD_SPEND_COLS]
 
     imported = 0
     skipped = 0
@@ -153,15 +190,30 @@ def import_from_csv(
     for idx, row in df.iterrows():
         try:
             lead_data = {"source": source, "status": LeadStatus.NEW}
-
             is_excluded = False
+            ad_spend = {}
+
             for col, val in row.items():
+                if pd.isna(val):
+                    continue
+
+                # 広告消化額列
+                if col in ad_cols_present:
+                    num = _parse_num(val)
+                    if num > 0:
+                        ad_spend[col] = num
+                    continue
+
                 field = COLUMN_MAP.get(col)
-                if not field or pd.isna(val):
+                if not field or field == "_skip":
                     continue
 
                 if field == "_exclude":
                     is_excluded = _parse_bool(val)
+                elif field == "_postal":
+                    # 郵便番号は住所に付加
+                    existing_addr = lead_data.get("address", "")
+                    lead_data["address"] = f"〒{val} {existing_addr}".strip()
                 elif field.startswith("has_") or field.startswith("runs_") or field == "uses_influencer":
                     lead_data[field] = _parse_bool(val)
                 else:
@@ -172,7 +224,6 @@ def import_from_csv(
 
             company_name = lead_data.get("company_name")
             if not company_name:
-                errors.append(f"行{idx + 2}: 会社名が空のためスキップ")
                 skipped += 1
                 continue
 
@@ -181,6 +232,20 @@ def import_from_csv(
                 if existing:
                     skipped += 1
                     continue
+
+            # 広告消化額データをsns_raw_dataに保存
+            if ad_spend:
+                lead_data["sns_raw_data"] = {"ad_spend": ad_spend}
+                # 広告運用中フラグを自動設定
+                total = ad_spend.get("予想消化額合計", 0)
+                if total > 0:
+                    lead_data["runs_web_ads"] = True
+                if ad_spend.get("予想消化額合計 (YouTube)", 0) > 0 or \
+                   ad_spend.get("予想消化額合計 (TikTok)", 0) > 0 or \
+                   ad_spend.get("予想消化額合計 (Shorts)", 0) > 0:
+                    lead_data["runs_video_ads"] = True
+                if ad_spend.get("予想消化額合計 (Instagram)", 0) > 0:
+                    lead_data["has_instagram"] = True
 
             lead = Lead(**lead_data)
             new_leads.append(lead)
