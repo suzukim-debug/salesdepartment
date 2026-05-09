@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
 
+    # Google Gemini (無料代替)
+    gemini_api_key: str = ""
+
     # メール送信 (Gmail API優先、フォールバックにSMTP)
     gmail_credentials_file: str = "credentials.json"   # Google OAuth2クレデンシャル
     gmail_token_file: str = "token.json"               # 認証トークン保存先

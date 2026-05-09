@@ -1,23 +1,39 @@
 """
-Claude APIを使ってリードごとにカスタマイズされたメール本文を生成する
+AI APIを使ってリードごとにカスタマイズされたメール本文を生成する
+Claude API または Google Gemini API を使用（設定に応じて自動切替）
 SNS診断データが存在する場合は改善施策を含む具体的な提案メールを生成する
 """
 import json
 import logging
-import anthropic
 from database.models import Lead, ServiceType
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-_client = None
 
-
-def get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    return _client
+def _call_ai(system_msg: str, prompt: str) -> str:
+    """Claude または Gemini でテキスト生成（設定済みのAPIを自動選択）"""
+    if settings.anthropic_api_key:
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            system=system_msg,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text.strip()
+    elif settings.gemini_api_key:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=system_msg,
+        )
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    else:
+        raise ValueError("ANTHROPIC_API_KEY または GEMINI_API_KEY を .env に設定してください")
 
 
 SERVICE_DESCRIPTIONS = {
@@ -179,7 +195,6 @@ def generate_email(lead: Lead, service: ServiceType | None = None) -> dict:
     if service is None:
         service = lead.recommended_service or ServiceType.MIXED
 
-    client = get_client()
     has_sns_diagnosis = bool(lead.sns_diagnosis and lead.sns_diagnosis.get("diagnosis_summary"))
 
     if has_sns_diagnosis:
@@ -193,14 +208,7 @@ def generate_email(lead: Lead, service: ServiceType | None = None) -> dict:
         prompt = _build_prompt_basic(lead, service)
         system_msg = "あなたは優秀なB2B営業メールライターです。必ずJSON形式で出力してください。"
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1500,
-        system=system_msg,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    raw = message.content[0].text.strip()
+    raw = _call_ai(system_msg, prompt)
     if "```json" in raw:
         raw = raw.split("```json")[1].split("```")[0].strip()
     elif "```" in raw:

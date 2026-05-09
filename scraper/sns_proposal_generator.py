@@ -117,32 +117,43 @@ def _build_analysis_prompt(company_name: str, industry: str, sns_data: dict) -> 
 厳密にJSON形式のみ出力してください。"""
 
 
+def _call_ai(prompt: str) -> str:
+    """Claude または Gemini でテキスト生成"""
+    system_msg = (
+        "あなたはSNSマーケティングの専門コンサルタントです。"
+        "実データに基づいた具体的な診断と施策提案を行います。"
+        "必ず有効なJSONのみを出力してください。"
+    )
+    if settings.anthropic_api_key:
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=system_msg,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text.strip()
+    elif settings.gemini_api_key:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=system_msg,
+        )
+        return model.generate_content(prompt).text.strip()
+    else:
+        raise ValueError("ANTHROPIC_API_KEY または GEMINI_API_KEY を設定してください")
+
+
 def generate_sns_diagnosis(company_name: str, industry: str, sns_data: dict) -> dict:
     """
-    Claude APIを使ってSNS診断レポートを生成する
-
-    Returns:
-        {
-            diagnosis_summary, critical_issues, improvement_proposals,
-            quick_wins, competitor_gap, overall_score, potential_score
-        }
+    AI APIを使ってSNS診断レポートを生成する（Claude / Gemini 自動切替）
     """
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     prompt = _build_analysis_prompt(company_name, industry, sns_data)
 
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            system=(
-                "あなたはSNSマーケティングの専門コンサルタントです。"
-                "実データに基づいた具体的な診断と施策提案を行います。"
-                "必ず有効なJSONのみを出力してください。"
-            ),
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        raw = message.content[0].text.strip()
+        raw = _call_ai(prompt)
         if "```json" in raw:
             raw = raw.split("```json")[1].split("```")[0].strip()
         elif "```" in raw:
