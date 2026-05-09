@@ -46,11 +46,15 @@
             <td><span class="score-badge {% if lead.lead_score >= 70 %}score-high{% else %}score-mid{% endif %}">{{ lead.lead_score }}</span></td>
             <td><small>{{ lead.recommended_service.value if lead.recommended_service else "-" }}</small></td>
             <td><small>{{ lead.budget_estimate or "-" }}</small></td>
-            <td><small class="text-truncate" style="max-width:100px;display:block;">{{ lead.contact_email }}</small></td>
+            <td><small class="text-truncate" style="max-width:100px;display:block;">{{ lead.contact_email or "なし" }}</small></td>
             <td>
+              {% if lead.contact_email %}
               <button class="btn btn-sm btn-outline-primary" onclick="openCompose({{ lead.id }}, '{{ lead.company_name | e }}')">
                 <i class="bi bi-stars"></i> AI作成
               </button>
+              {% else %}
+              <span class="text-muted small">メールなし</span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
