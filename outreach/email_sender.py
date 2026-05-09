@@ -138,13 +138,27 @@ def send_outreach_email(
     service_type: ServiceType,
 ) -> OutreachLog:
     """メールを送信してOutreachLogに記録する"""
+    import smtplib
+
     if not lead.contact_email:
         raise ValueError(f"リード {lead.company_name} にメールアドレスがありません")
 
     log = create_outreach_log(db, lead, subject, body_text, body_html, service_type)
 
     try:
-        asyncio.run(send_email_async(lead.contact_email, subject, body_text, log.body_html))
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{settings.smtp_from_name} <{settings.smtp_user}>"
+        msg["To"] = lead.contact_email
+        msg.attach(MIMEText(body_text, "plain", "utf-8"))
+        msg.attach(MIMEText(log.body_html, "html", "utf-8"))
+
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(settings.smtp_user, settings.smtp_password)
+            server.sendmail(settings.smtp_user, [lead.contact_email], msg.as_bytes())
+
         log.sent_at = datetime.utcnow()
         lead.status = LeadStatus.EMAIL_SENT
     except Exception as e:
