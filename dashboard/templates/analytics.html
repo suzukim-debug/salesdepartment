@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}⑧結果・分析{% endblock %}
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+  <div>
+    <h5 class="mb-0 fw-bold"><i class="bi bi-bar-chart-line me-2"></i>⑧結果記録・分析 <span class="step-badge">STEP 8</span></h5>
+    <small class="text-muted">メール・架電の結果をGoogleスプレッドシートに自動保存</small>
+  </div>
+  <div class="d-flex gap-2">
+    {% if sheets_ok %}
+    <button class="btn btn-success btn-sm" id="exportBtn">
+      <i class="bi bi-cloud-upload me-1"></i>Sheetsに保存
+    </button>
+    {% else %}
+    <span class="badge bg-secondary">Sheets未設定</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- KPIカード -->
+<div class="row g-3 mb-4">
+  <div class="col-md-2"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-3">{{ stats.total }}</div><div class="text-muted small">総リード</div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-3 text-primary">{{ stats.sent }}</div><div class="text-muted small">メール送信</div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-3 text-info">{{ opened }}</div><div class="text-muted small">開封 ({{ stats.open_rate }}%)</div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-3 text-warning">{{ clicked }}</div><div class="text-muted small">クリック ({{ click_rate }}%)</div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-3 text-danger">{{ replied }}</div><div class="text-muted small">返信 ({{ reply_rate }}%)</div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-3 text-success">{{ stats.meetings }}</div><div class="text-muted small">アポ ({{ apo_rate }}%)</div></div></div>
+</div>
+
+<div class="row g-4">
+  <!-- ステータス分布 -->
+  <div class="col-lg-5">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">リードステータス分布</h6>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0" style="font-size:13px;">
+          <thead class="table-light"><tr><th>ステータス</th><th class="text-end">件数</th><th style="width:40%">割合</th></tr></thead>
+          <tbody>
+          {% for status, count in status_dist %}
+          {% set pct = (count / stats.total * 100) | round(1) if stats.total > 0 else 0 %}
+          <tr>
+            <td><span class="badge {% if status.value in ['responded', 'replied'] %}bg-danger{% elif status.value == 'meeting_set' %}bg-success{% elif status.value == 'email_sent' %}bg-primary{% else %}bg-secondary{% endif %}">{{ status.value }}</span></td>
+            <td class="text-end">{{ count }}</td>
+            <td>
+              <div class="progress" style="height:6px;">
+                <div class="progress-bar" style="width:{{ pct }}%"></div>
+              </div>
+              <small class="text-muted">{{ pct }}%</small>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 架電結果 -->
+  <div class="col-lg-4">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">架電結果集計</h6>
+      </div>
+      <div class="card-body">
+        {% if call_results %}
+        {% for result, count in call_results %}
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span style="font-size:13px;">{{ result }}</span>
+          <span class="badge {% if result == 'アポ獲得' %}bg-success{% elif result == 'お断り' %}bg-danger{% else %}bg-secondary{% endif %}">{{ count }}</span>
+        </div>
+        {% endfor %}
+        <hr class="my-2">
+        <div class="d-flex justify-content-between">
+          <small class="text-muted">アポ率</small>
+          <strong class="text-success">{{ apo_rate }}%</strong>
+        </div>
+        {% else %}
+        <div class="text-center text-muted py-3">架電データなし</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- フォローアップ状況 -->
+  <div class="col-lg-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">自動化サマリー</h6>
+      </div>
+      <div class="card-body">
+        <div class="d-flex justify-content-between mb-2" style="font-size:13px;">
+          <span>フォローアップ送信</span>
+          <strong>{{ followups }}件</strong>
+        </div>
+        <div class="d-flex justify-content-between mb-2" style="font-size:13px;">
+          <span>総架電数</span>
+          <strong>{{ stats.calls }}件</strong>
+        </div>
+        <div class="d-flex justify-content-between mb-2" style="font-size:13px;">
+          <span>アポ獲得</span>
+          <strong class="text-success">{{ stats.meetings }}件</strong>
+        </div>
+      </div>
+    </div>
+
+    {% if sheets_ok %}
+    <div class="card border-0 shadow-sm mt-3 border-success border-1">
+      <div class="card-body py-2">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-check-circle-fill text-success"></i>
+          <small>Googleスプレッドシート連携済み</small>
+        </div>
+        <small class="text-muted d-block mt-1">毎朝8:30に自動保存</small>
+      </div>
+    </div>
+    {% else %}
+    <div class="card border-0 shadow-sm mt-3 border-warning border-1">
+      <div class="card-body py-2">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-exclamation-triangle text-warning"></i>
+          <small>Sheets未連携</small>
+        </div>
+        <small class="text-muted d-block mt-1">service_account.jsonまたはtoken.jsonを配置</small>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const exportBtn = document.getElementById("exportBtn");
+if (exportBtn) {
+  exportBtn.addEventListener("click", async () => {
+    exportBtn.disabled = true; exportBtn.textContent = "保存中...";
+    const r = await fetch("/analytics/export-sheets", {method:"POST"});
+    const d = await r.json();
+    if (d.spreadsheet_url) {
+      exportBtn.innerHTML = '<i class="bi bi-check"></i> 保存完了';
+      exportBtn.classList.replace("btn-success", "btn-outline-success");
+      setTimeout(() => window.open(d.spreadsheet_url, "_blank"), 500);
+    } else if (d.error) {
+      alert("エラー: " + d.error);
+    }
+    exportBtn.disabled = false;
+  });
+}
+</script>
+{% endblock %}

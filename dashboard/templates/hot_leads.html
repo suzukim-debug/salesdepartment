@@ -1,52 +1,70 @@
 {% extends "base.html" %}
-{% block title %}ホットリード - Sales System{% endblock %}
+{% block title %}⑤⑥反響・テレアポリスト{% endblock %}
 {% block content %}
-<h4 class="mb-4"><i class="bi bi-fire"></i> ホットリード <span class="hot-indicator ms-2"></span></h4>
+<div class="page-header d-flex justify-content-between align-items-center">
+  <div>
+    <h5 class="mb-0 fw-bold"><i class="bi bi-fire me-2"></i>⑤⑥反響検知・テレアポリスト優先化 <span class="step-badge">STEP 5/6</span></h5>
+    <small class="text-muted">開封・クリック・返信・フォーム回答を検知 → スコア順でテレアポリストへ</small>
+  </div>
+  <div class="d-flex gap-2">
+    {% if sheets_ok %}
+    <button class="btn btn-success btn-sm" id="sheetsExportBtn">
+      <i class="bi bi-table me-1"></i>Sheetsにテレアポリストを書き出す
+    </button>
+    {% endif %}
+    <a href="/calls" class="btn btn-danger btn-sm">
+      <i class="bi bi-telephone me-1"></i>架電管理へ
+    </a>
+  </div>
+</div>
 
 {% if hot_leads %}
 <div class="row g-3">
   {% for lead in hot_leads %}
   <div class="col-md-6 col-lg-4">
-    <div class="card border-0 shadow-sm h-100 {% if lead.status.value == 'responded' %}border-start border-danger border-3{% endif %}">
+    <div class="card border-0 shadow-sm h-100
+      {% if lead.status.value == 'responded' %}border-start border-danger border-3
+      {% elif lead.status.value == 'replied' %}border-start border-warning border-3
+      {% elif lead.status.value == 'clicked' %}border-start border-info border-3
+      {% endif %}">
       <div class="card-body">
-        <div class="d-flex justify-content-between align-items-start mb-2">
+        <div class="d-flex justify-content-between align-items-start mb-1">
           <div>
-            <h6 class="mb-0">{{ lead.company_name }}</h6>
+            <h6 class="mb-0" style="font-size:14px;">{{ lead.company_name }}</h6>
             <small class="text-muted">{{ lead.industry }}</small>
           </div>
-          <span class="score-badge {% if lead.lead_score >= 70 %}score-high{% elif lead.lead_score >= 40 %}score-mid{% else %}score-low{% endif %}">
-            {{ lead.lead_score }}
-          </span>
+          <span class="score-badge {% if lead.lead_score >= 70 %}score-high{% elif lead.lead_score >= 40 %}score-mid{% else %}score-low{% endif %}">{{ lead.lead_score }}</span>
         </div>
 
-        <div class="mb-2" style="font-size:12px;">
-          <span class="badge {% if lead.status.value == 'responded' %}bg-danger{% elif lead.status.value == 'clicked' %}bg-warning text-dark{% elif lead.status.value == 'opened' %}bg-info{% else %}bg-secondary{% endif %}">
-            {{ lead.status.value }}
-          </span>
-          {% if lead.recommended_service %}
-          <span class="badge bg-light text-dark ms-1">{{ lead.recommended_service.value }}</span>
-          {% endif %}
+        <div class="mb-2" style="font-size:11px;">
+          <span class="badge {% if lead.status.value == 'responded' %}bg-danger{% elif lead.status.value == 'replied' %}bg-warning text-dark{% elif lead.status.value == 'clicked' %}bg-info{% else %}bg-secondary{% endif %}">{{ lead.status.value }}</span>
+          {% if lead.recommended_service %}<span class="badge bg-light text-dark ms-1">{{ lead.recommended_service.value }}</span>{% endif %}
+          {% if lead.budget_estimate %}<span class="badge bg-light text-dark ms-1">{{ lead.budget_estimate }}</span>{% endif %}
         </div>
 
         {% if lead.contact_phone or lead.company_phone %}
-        <div class="mb-2" style="font-size:13px;">
-          <i class="bi bi-telephone text-success"></i>
+        <div class="mb-1" style="font-size:13px;">
+          <i class="bi bi-telephone-fill text-success me-1"></i>
           <strong>{{ lead.contact_phone or lead.company_phone }}</strong>
-          {% if lead.contact_name %}<br><small class="text-muted">{{ lead.contact_name }} {{ lead.contact_title or '' }}</small>{% endif %}
         </div>
+        {% if lead.contact_name %}
+        <div style="font-size:11px; color:#666;">{{ lead.contact_name }} {{ lead.contact_title or '' }}</div>
+        {% endif %}
         {% endif %}
 
         {% if lead.outreach_logs %}
         {% set latest = lead.outreach_logs | sort(attribute='sent_at', reverse=True) | first %}
-        <div class="mb-2" style="font-size:11px; color:#666;">
-          <i class="bi bi-envelope"></i> 送信: {{ latest.sent_at.strftime('%m/%d') if latest.sent_at else '未送信' }}
-          {% if latest.opened_at %} &nbsp;<span class="text-success">開封済</span>{% endif %}
-          {% if latest.clicked_at %} &nbsp;<span class="text-warning">クリック済</span>{% endif %}
-          {% if latest.responded_at %} &nbsp;<span class="text-danger fw-bold">フォーム回答!</span>{% endif %}
+        <div class="mt-1" style="font-size:11px; color:#888; border-top:1px solid #eee; padding-top:6px;">
+          📧 {{ latest.sent_at.strftime('%m/%d') if latest.sent_at else '-' }}
+          {% if latest.opened_at %}<span class="text-success ms-1">開封</span>{% endif %}
+          {% if latest.clicked_at %}<span class="text-warning ms-1">クリック</span>{% endif %}
+          {% if latest.replied_at %}<span class="text-danger ms-1 fw-bold">返信!</span>{% endif %}
+          {% if latest.responded_at %}<span class="text-danger ms-1 fw-bold">フォーム!</span>{% endif %}
+          {% if latest.followup_sent_at %}<span class="text-info ms-1">フォロー済</span>{% endif %}
         </div>
         {% endif %}
 
-        <a href="/leads/{{ lead.id }}" class="btn btn-sm btn-primary w-100 mt-1">詳細・架電記録</a>
+        <a href="/leads/{{ lead.id }}" class="btn btn-sm btn-primary w-100 mt-2">詳細・架電記録</a>
       </div>
     </div>
   </div>
@@ -56,9 +74,28 @@
 <div class="card border-0 shadow-sm">
   <div class="card-body text-center py-5 text-muted">
     <i class="bi bi-inbox" style="font-size:40px;"></i>
-    <p class="mt-3">ホットリードはまだありません。<br>メールを送信して反響を待ちましょう。</p>
+    <p class="mt-3">反響リードはまだありません。<br>メールを送信して開封・クリック・返信を待ちましょう。</p>
     <a href="/outreach" class="btn btn-primary">メール送信ページへ</a>
   </div>
 </div>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const btn = document.getElementById("sheetsExportBtn");
+if (btn) {
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; btn.textContent = "書き出し中...";
+    const r = await fetch("/hot-leads/export-sheets", {method:"POST"});
+    const d = await r.json();
+    if (d.spreadsheet_url) {
+      btn.innerHTML = `<i class="bi bi-check"></i> ${d.rows_written}件を書き出し完了`;
+      setTimeout(() => window.open(d.spreadsheet_url, "_blank"), 500);
+    } else if (d.error) {
+      alert("エラー: " + d.error);
+    }
+    btn.disabled = false;
+  });
+}
+</script>
 {% endblock %}

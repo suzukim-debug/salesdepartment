@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}⑦架電管理{% endblock %}
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+  <div>
+    <h5 class="mb-0 fw-bold"><i class="bi bi-telephone me-2"></i>⑦テレアポ架電管理 <span class="step-badge">STEP 7</span></h5>
+    <small class="text-muted">スコア順に優先架電リストを表示。架電結果はSheetsに自動保存</small>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- 架電リスト -->
+  <div class="col-lg-7">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">本日の架電リスト（優先順）</h6>
+      </div>
+      <div class="card-body p-0">
+        {% if call_targets %}
+        <div class="list-group list-group-flush">
+        {% for lead in call_targets %}
+        <div class="list-group-item py-2 px-3" id="lead-{{ lead.id }}">
+          <div class="d-flex justify-content-between align-items-start">
+            <div style="flex:1">
+              <div class="d-flex align-items-center gap-2">
+                <strong style="font-size:14px;">{{ lead.company_name }}</strong>
+                <span class="score-badge {% if lead.lead_score >= 70 %}score-high{% elif lead.lead_score >= 40 %}score-mid{% else %}score-low{% endif %}">{{ lead.lead_score }}</span>
+                <span class="badge {% if lead.status.value == 'responded' %}bg-danger{% elif lead.status.value == 'replied' %}bg-warning text-dark{% elif lead.status.value == 'followup_sent' %}bg-info{% else %}bg-secondary{% endif %}" style="font-size:10px;">{{ lead.status.value }}</span>
+              </div>
+              <div style="font-size:12px; color:#555;">
+                {{ lead.industry or "" }}
+                {% if lead.recommended_service %} | 提案: {{ lead.recommended_service.value }}{% endif %}
+                {% if lead.budget_estimate %} | 予算: {{ lead.budget_estimate }}{% endif %}
+              </div>
+              <div class="mt-1" style="font-size:12px;">
+                <i class="bi bi-telephone text-success"></i>
+                <strong>{{ lead.contact_phone or lead.company_phone or "電話番号なし" }}</strong>
+                {% if lead.contact_name %}
+                &nbsp;/ {{ lead.contact_name }} {{ lead.contact_title or '' }}
+                {% endif %}
+              </div>
+              {% if lead.outreach_logs %}
+              {% set latest = lead.outreach_logs | sort(attribute='sent_at', reverse=True) | first %}
+              <div style="font-size:11px; color:#888;" class="mt-1">
+                📧 送信: {{ latest.sent_at.strftime('%m/%d') if latest.sent_at else '-' }}
+                {% if latest.opened_at %} <span class="text-success">開封済</span>{% endif %}
+                {% if latest.replied_at %} <span class="text-danger fw-bold">返信あり!</span>{% endif %}
+                {% if latest.responded_at %} <span class="text-danger fw-bold">フォーム回答!</span>{% endif %}
+              </div>
+              {% endif %}
+            </div>
+            <div class="ms-2">
+              <button class="btn btn-sm btn-primary" onclick="openCallModal({{ lead.id }}, '{{ lead.company_name | e }}')">
+                <i class="bi bi-telephone-plus"></i> 記録
+              </button>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-5 text-muted"><i class="bi bi-inbox"></i><p>架電対象なし</p></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- 今日の架電ログ -->
+  <div class="col-lg-5">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-clock-history me-1"></i>本日の架電ログ</h6>
+      </div>
+      <div class="card-body p-0">
+        {% if today_logs %}
+        <ul class="list-group list-group-flush" style="font-size:12px;">
+        {% for cl in today_logs %}
+        <li class="list-group-item py-2">
+          <div class="d-flex justify-content-between">
+            <strong>{{ cl.lead.company_name if cl.lead else '?' }}</strong>
+            <small class="text-muted">{{ cl.called_at.strftime('%H:%M') if cl.called_at else '-' }}</small>
+          </div>
+          <div>
+            <span class="badge {% if cl.result == 'アポ獲得' %}bg-success{% elif cl.result == 'お断り' %}bg-danger{% else %}bg-secondary{% endif %}">{{ cl.result }}</span>
+            {% if cl.next_action %}<small class="text-muted ms-1">→ {{ cl.next_action }}</small>{% endif %}
+          </div>
+          {% if cl.notes %}<small class="text-muted">{{ cl.notes[:50] }}</small>{% endif %}
+        </li>
+        {% endfor %}
+        </ul>
+        {% else %}
+        <div class="text-center py-3 text-muted small">本日の架電記録なし</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mt-3">
+      <div class="card-body py-2">
+        <div class="d-flex justify-content-between align-items-center">
+          <small class="text-muted">架電ログをGoogleスプレッドシートに同期</small>
+          <button class="btn btn-sm btn-outline-success" id="syncBtn">
+            <i class="bi bi-cloud-upload"></i> 同期
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 架電記録モーダル -->
+<div class="modal fade" id="callModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title">架電記録: <span id="modalCompany"></span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="callForm">
+          <input type="hidden" id="callLeadId" name="lead_id">
+          <div class="mb-2">
+            <label class="form-label form-label-sm">架電担当者名</label>
+            <input type="text" name="caller_name" class="form-control form-control-sm" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm">通話時間（秒）</label>
+            <input type="number" name="duration_seconds" class="form-control form-control-sm" value="0" min="0">
+          </div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm">結果 <span class="text-danger">*</span></label>
+            <div class="d-flex flex-wrap gap-1">
+              {% for r in ["繋がらず", "折り返し", "繋がった", "再架電", "アポ獲得", "お断り"] %}
+              <label class="btn btn-sm btn-outline-secondary" style="font-size:12px;">
+                <input type="radio" name="result" value="{{ r }}" required hidden>{{ r }}
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm">次回アクション</label>
+            <input type="text" name="next_action" class="form-control form-control-sm" placeholder="例: 再架電、資料送付">
+          </div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm">次回日時</label>
+            <input type="datetime-local" name="next_action_date" class="form-control form-control-sm">
+          </div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm">メモ</label>
+            <textarea name="notes" class="form-control form-control-sm" rows="3" placeholder="話した内容・相手の反応など"></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">キャンセル</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="submitCall()">記録する</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const callModal = new bootstrap.Modal(document.getElementById('callModal'));
+
+function openCallModal(leadId, companyName) {
+  document.getElementById("callLeadId").value = leadId;
+  document.getElementById("modalCompany").textContent = companyName;
+  document.getElementById("callForm").reset();
+  document.getElementById("callLeadId").value = leadId;
+  callModal.show();
+}
+
+async function submitCall() {
+  const fd = new FormData(document.getElementById("callForm"));
+  if (!fd.get("result")) { alert("結果を選択してください"); return; }
+  const r = await fetch("/calls/log", {method:"POST", body:fd});
+  if (r.ok) { callModal.hide(); location.reload(); }
+}
+
+// ラジオボタンのスタイル
+document.querySelectorAll('input[name="result"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    document.querySelectorAll('input[name="result"]').forEach(r => {
+      r.closest("label").classList.remove("btn-primary", "active");
+      r.closest("label").classList.add("btn-outline-secondary");
+    });
+    radio.closest("label").classList.add("btn-primary", "active");
+    radio.closest("label").classList.remove("btn-outline-secondary");
+  });
+});
+
+document.getElementById("syncBtn").addEventListener("click", async () => {
+  const r = await fetch("/analytics/export-sheets", {method:"POST"});
+  const d = await r.json();
+  if (d.rows_written !== undefined) {
+    alert(`同期完了: ${d.rows_written}件の架電ログを書き込みました`);
+  } else if (d.error) {
+    alert("エラー: " + d.error);
+  }
+});
+</script>
+{% endblock %}

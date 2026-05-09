@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}①スクレイピング{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h5 class="mb-0 fw-bold"><i class="bi bi-search me-2"></i>①リスト収集・スクレイピング <span class="step-badge">STEP 1</span></h5>
+  <small class="text-muted">企業HP・SNS・求人サイトから情報を自動収集してスコアを更新</small>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-warning">{{ pending }}</div><div class="text-muted small">未スクレイピング（URL保有）</div></div></div>
+  <div class="col-md-4"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-success">{{ done }}</div><div class="text-muted small">スクレイピング完了</div></div></div>
+  <div class="col-md-4"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-danger">{{ failed }}</div><div class="text-muted small">失敗（URL無効等）</div></div></div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">スクレイピング実行</h6>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-3">
+          企業HPから以下の情報を自動収集します：
+          <br>・SNSアカウント（Instagram/TikTok/YouTube/LINE）
+          <br>・電話番号の補完
+          <br>・Google広告タグの検出
+          <br>・求人情報からマーケター採用状況・予算推定
+        </p>
+        <div class="mb-3">
+          <label class="form-label small">処理件数</label>
+          <select id="scrapeLimit" class="form-select form-select-sm">
+            <option value="5">5件（テスト）</option>
+            <option value="10" selected>10件</option>
+            <option value="20">20件</option>
+            <option value="50">50件</option>
+          </select>
+        </div>
+        <button class="btn btn-primary w-100" id="runScrapeBtn">
+          <i class="bi bi-play-circle me-1"></i>スクレイピング開始（バックグラウンド）
+        </button>
+        <div id="scrapeMsg" class="mt-2"></div>
+        <hr>
+        <div class="alert alert-warning small mb-0 py-2">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          マナーモード: リクエスト間隔 {{ settings.scrape_delay_seconds }}秒。相手サーバーへの負荷を最小限に抑えます。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">直近のスクレイピング履歴</h6>
+      </div>
+      <div class="card-body p-0">
+        {% if recent_jobs %}
+        <table class="table table-sm mb-0" style="font-size:12px;">
+          <thead class="table-light">
+            <tr><th>会社</th><th>種別</th><th>状態</th><th>スコア変化</th><th>完了時刻</th></tr>
+          </thead>
+          <tbody>
+          {% for job in recent_jobs %}
+          <tr>
+            <td>{{ job.lead.company_name if job.lead else "?" }}</td>
+            <td>{{ job.scrape_type }}</td>
+            <td>
+              <span class="badge {% if job.status.value == 'done' %}bg-success{% elif job.status.value == 'failed' %}bg-danger{% else %}bg-secondary{% endif %}">
+                {{ job.status.value }}
+              </span>
+            </td>
+            <td>
+              {% if job.result_data and job.result_data.get('score_before') %}
+              <small>{{ job.result_data.score_before }} → {{ job.result_data.score_after }}</small>
+              {% else %}-{% endif %}
+            </td>
+            <td>{{ job.completed_at.strftime('%m/%d %H:%M') if job.completed_at else '-' }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-center py-4 text-muted">履歴なし</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const settings_delay = {{ settings.scrape_delay_seconds }};
+document.getElementById("runScrapeBtn").addEventListener("click", async () => {
+  const limit = document.getElementById("scrapeLimit").value;
+  const fd = new FormData(); fd.append("limit", limit);
+  const btn = document.getElementById("runScrapeBtn");
+  btn.disabled = true; btn.textContent = "実行中...";
+  const r = await fetch("/scraper/run", {method:"POST", body:fd});
+  const d = await r.json();
+  document.getElementById("scrapeMsg").innerHTML =
+    `<div class="alert alert-info py-1 mb-0 small">${d.message}</div>`;
+  setTimeout(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-play-circle me-1"></i>スクレイピング開始'; location.reload(); }, 3000);
+});
+</script>
+{% endblock %}

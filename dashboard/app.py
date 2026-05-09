@@ -1,48 +1,72 @@
 """
-FastAPI ダッシュボード
-- リード一覧・スコアリング
-- ホットリード管理（反響あり）
-- メール送信・AI生成
-- 架電ログ記録
-- トラッキングエンドポイント
+FastAPI ダッシュボード (全8ステップ対応版)
+① スクレイピング制御
+② AI分析・スコアリング確認
+③ メール生成（Claude API）
+④ Gmail送信・スケジュール
+⑤ 反響検知（開封/クリック/返信/フォーム）
+⑥ テレアポリスト（Sheetsエクスポート）
+⑦ テレアポ架電管理
+⑧ 結果記録・分析
 """
 import json
 import io
-from datetime import datetime, date
+from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Depends, Request, Form, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, Depends, Request, Form, UploadFile, File, HTTPException, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
 from database.db import get_db, init_db
-from database.models import Lead, OutreachLog, CallLog, LeadStatus, ServiceType
+from database.models import (
+    Lead, OutreachLog, CallLog, FollowUpLog, ScrapeJob,
+    LeadStatus, ServiceType, ScrapeStatus, SchedulerJob
+)
 from lead_generator.csv_importer import import_from_csv, get_csv_template
-from lead_generator.scorer import score_lead
+from lead_generator.scorer import score_lead, batch_score_leads
 from outreach.template_generator import generate_email
-from outreach.email_sender import send_outreach_email, create_outreach_log
-from tracker.response_tracker import record_open, record_click, record_form_submit, record_unsubscribe
+from outreach.email_sender import create_outreach_log
+from tracker.response_tracker import (
+    record_open, record_click, record_form_submit, record_unsubscribe
+)
 from config import settings
 
-app = FastAPI(title="Sales Outreach System")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    from scheduler.runner import start_scheduler, stop_scheduler
+    start_scheduler()
+    yield
+    stop_scheduler()
+
+
+app = FastAPI(title="Sales Outreach System", lifespan=lifespan)
 templates = Jinja2Templates(directory="dashboard/templates")
 
-init_db()
 
-
-# ─── ヘルパー ────────────────────────────────────────────────
+# ─── ユーティリティ ─────────────────────────────────────────
 
 def _get_stats(db: Session) -> dict:
     total = db.query(func.count(Lead.id)).scalar()
-    hot = db.query(func.count(Lead.id)).filter(Lead.status == LeadStatus.RESPONDED).scalar()
-    sent = db.query(func.count(Lead.id)).filter(Lead.status.in_([
-        LeadStatus.EMAIL_SENT, LeadStatus.OPENED, LeadStatus.CLICKED, LeadStatus.RESPONDED
-    ])).scalar()
+    hot = db.query(func.count(Lead.id)).filter(
+        Lead.status.in_([LeadStatus.RESPONDED, LeadStatus.REPLIED])
+    ).scalar()
+    sent = db.query(func.count(OutreachLog.id)).filter(OutreachLog.sent_at.isnot(None)).scalar()
     meetings = db.query(func.count(Lead.id)).filter(Lead.status == LeadStatus.MEETING_SET).scalar()
-    return {"total": total, "hot": hot, "sent": sent, "meetings": meetings}
+    calls = db.query(func.count(CallLog.id)).scalar()
+    open_rate = 0
+    if sent > 0:
+        opened = db.query(func.count(OutreachLog.id)).filter(OutreachLog.opened_at.isnot(None)).scalar()
+        open_rate = round(opened / sent * 100, 1)
+    return {
+        "total": total, "hot": hot, "sent": sent,
+        "meetings": meetings, "calls": calls, "open_rate": open_rate,
+    }
 
 
 # ─── ダッシュボード TOP ─────────────────────────────────────
@@ -52,21 +76,85 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     stats = _get_stats(db)
     hot_leads = (
         db.query(Lead)
-        .filter(Lead.status == LeadStatus.RESPONDED)
+        .filter(Lead.status.in_([LeadStatus.RESPONDED, LeadStatus.REPLIED, LeadStatus.CLICKED]))
         .order_by(desc(Lead.lead_score))
-        .limit(10)
-        .all()
+        .limit(10).all()
     )
-    recent_leads = (
-        db.query(Lead)
-        .order_by(desc(Lead.created_at))
-        .limit(5)
-        .all()
-    )
+    from scheduler.runner import get_scheduler_status
+    scheduler_jobs = get_scheduler_status()
+    followup_pending = db.query(func.count(Lead.id)).filter(
+        Lead.status.in_([LeadStatus.EMAIL_SENT, LeadStatus.OPENED])
+    ).scalar()
     return templates.TemplateResponse("index.html", {
-        "request": request, "stats": stats,
-        "hot_leads": hot_leads, "recent_leads": recent_leads,
+        "request": request, "stats": stats, "hot_leads": hot_leads,
+        "scheduler_jobs": scheduler_jobs, "followup_pending": followup_pending,
+        "now": datetime.utcnow(),
     })
+
+
+# ─── ① スクレイピング ────────────────────────────────────────
+
+@app.get("/scraper", response_class=HTMLResponse)
+async def scraper_page(request: Request, db: Session = Depends(get_db)):
+    pending = db.query(func.count(Lead.id)).filter(
+        Lead.scrape_status == ScrapeStatus.PENDING, Lead.website.isnot(None)
+    ).scalar()
+    done = db.query(func.count(Lead.id)).filter(Lead.scrape_status == ScrapeStatus.DONE).scalar()
+    failed = db.query(func.count(Lead.id)).filter(Lead.scrape_status == ScrapeStatus.FAILED).scalar()
+    recent_jobs = (
+        db.query(ScrapeJob).order_by(desc(ScrapeJob.completed_at)).limit(20).all()
+    )
+    return templates.TemplateResponse("scraper.html", {
+        "request": request,
+        "pending": pending, "done": done, "failed": failed,
+        "recent_jobs": recent_jobs, "settings": settings,
+    })
+
+
+@app.post("/scraper/run")
+async def run_scraper(
+    background_tasks: BackgroundTasks,
+    limit: int = Form(10),
+    db: Session = Depends(get_db),
+):
+    """バックグラウンドでスクレイピングを実行"""
+    def _run():
+        from database.db import SessionLocal
+        from scraper.orchestrator import run_batch_scrape
+        session = SessionLocal()
+        try:
+            run_batch_scrape(session, limit=limit)
+        finally:
+            session.close()
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"message": f"スクレイピング開始（最大{limit}件）"})
+
+
+@app.post("/scraper/lead/{lead_id}")
+async def scrape_single(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """1社だけスクレイピング"""
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(404)
+
+    def _run():
+        from database.db import SessionLocal
+        from scraper.orchestrator import run_scrape_for_lead
+        session = SessionLocal()
+        try:
+            lead_obj = session.query(Lead).filter(Lead.id == lead_id).first()
+            run_scrape_for_lead(lead_obj, session)
+            session.commit()
+        finally:
+            session.close()
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"message": f"{lead.company_name} のスクレイピングを開始"})
 
 
 # ─── リード管理 ─────────────────────────────────────────────
@@ -108,7 +196,7 @@ async def leads_list(
 async def lead_detail(request: Request, lead_id: int, db: Session = Depends(get_db)):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
-        raise HTTPException(404, "リードが見つかりません")
+        raise HTTPException(404)
     return templates.TemplateResponse("lead_detail.html", {
         "request": request, "lead": lead,
         "statuses": [s.value for s in LeadStatus],
@@ -117,9 +205,7 @@ async def lead_detail(request: Request, lead_id: int, db: Session = Depends(get_
 
 @app.post("/leads/{lead_id}/status")
 async def update_lead_status(
-    lead_id: int,
-    status: str = Form(...),
-    memo: str = Form(""),
+    lead_id: int, status: str = Form(...), memo: str = Form(""),
     db: Session = Depends(get_db),
 ):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
@@ -133,10 +219,7 @@ async def update_lead_status(
 
 
 @app.post("/leads/import")
-async def import_leads(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-):
+async def import_leads(file: UploadFile = File(...), db: Session = Depends(get_db)):
     content = await file.read()
     result = import_from_csv(io.BytesIO(content), db)
     db.commit()
@@ -145,19 +228,17 @@ async def import_leads(
 
 @app.get("/leads/export/template")
 async def download_template():
-    content = get_csv_template()
     return Response(
-        content=content.encode("utf-8-sig"),
+        content=get_csv_template().encode("utf-8-sig"),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=lead_template.csv"},
     )
 
 
-# ─── メール送信 ─────────────────────────────────────────────
+# ─── ③ メール生成 / ④ 送信 ─────────────────────────────────
 
 @app.get("/outreach", response_class=HTMLResponse)
 async def outreach_page(request: Request, db: Session = Depends(get_db)):
-    # メール送信対象: NEW/RESEARCHED でスコア40以上
     targets = (
         db.query(Lead)
         .filter(
@@ -169,28 +250,23 @@ async def outreach_page(request: Request, db: Session = Depends(get_db)):
         .all()
     )
     sent_logs = (
-        db.query(OutreachLog)
-        .order_by(desc(OutreachLog.sent_at))
-        .limit(20)
-        .all()
+        db.query(OutreachLog).order_by(desc(OutreachLog.sent_at)).limit(20).all()
     )
+    from gmail_integration.auth import is_gmail_configured
+    gmail_ok = is_gmail_configured()
     return templates.TemplateResponse("outreach.html", {
-        "request": request, "targets": targets, "sent_logs": sent_logs,
+        "request": request, "targets": targets,
+        "sent_logs": sent_logs, "gmail_ok": gmail_ok,
     })
 
 
 @app.post("/outreach/preview")
-async def preview_email(
-    lead_id: int = Form(...),
-    db: Session = Depends(get_db),
-):
-    """AI生成メールのプレビューを返す"""
+async def preview_email(lead_id: int = Form(...), db: Session = Depends(get_db)):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(404)
     try:
-        result = generate_email(lead)
-        return JSONResponse(result)
+        return JSONResponse(generate_email(lead))
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -202,17 +278,27 @@ async def send_email(
     body: str = Form(...),
     body_html: str = Form(...),
     service_type: str = Form(...),
+    scheduled_at: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(404)
 
+    stype = ServiceType(service_type)
+    scheduled_dt = None
+    if scheduled_at:
+        try:
+            scheduled_dt = datetime.fromisoformat(scheduled_at)
+        except ValueError:
+            pass
+
     try:
-        stype = ServiceType(service_type)
-        send_outreach_email(db, lead, subject, body, body_html, stype)
+        from gmail_integration.sender import send_outreach_via_gmail
+        send_outreach_via_gmail(db, lead, subject, body, body_html, stype, scheduled_dt)
         db.commit()
-        return JSONResponse({"success": True})
+        msg = f"スケジュール登録: {scheduled_dt}" if scheduled_dt else "送信完了"
+        return JSONResponse({"success": True, "message": msg})
     except Exception as e:
         db.rollback()
         raise HTTPException(500, str(e))
@@ -227,7 +313,6 @@ async def save_draft(
     service_type: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    """送信せずに下書き保存"""
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(404)
@@ -237,21 +322,132 @@ async def save_draft(
     return JSONResponse({"success": True})
 
 
-# ─── ホットリード & 架電管理 ─────────────────────────────────
+# ─── ⑤ 反響検知 ────────────────────────────────────────────
+
+@app.get("/track/open/{token}")
+async def track_open(token: str, request: Request, db: Session = Depends(get_db)):
+    ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")
+    record_open(db, token, ip, ua)
+    gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+    return Response(content=gif, media_type="image/gif")
+
+
+@app.get("/track/click/{token}")
+async def track_click(
+    token: str, request: Request, url: str = Query(...), db: Session = Depends(get_db)
+):
+    ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")
+    redirect_url = record_click(db, token, url, ip, ua)
+    return RedirectResponse(redirect_url)
+
+
+@app.get("/form/{token}", response_class=HTMLResponse)
+async def inquiry_form(token: str, request: Request):
+    return templates.TemplateResponse("inquiry_form.html", {"request": request, "token": token})
+
+
+@app.post("/form/{token}/submit")
+async def submit_form(
+    token: str, request: Request,
+    name: str = Form(...), company: str = Form(...),
+    email: str = Form(...), phone: str = Form(""), message: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    ip = request.client.host if request.client else ""
+    record_form_submit(db, token, {
+        "name": name, "company": company,
+        "email": email, "phone": phone, "message": message,
+    }, ip)
+    return templates.TemplateResponse("form_thanks.html", {"request": request})
+
+
+@app.get("/unsubscribe/{token}")
+async def unsubscribe(token: str, db: Session = Depends(get_db)):
+    record_unsubscribe(db, token)
+    return HTMLResponse("<html><body><p>配信停止しました。ご迷惑をおかけして申し訳ございません。</p></body></html>")
+
+
+# ─── ⑥ テレアポリスト（Sheetsエクスポート）───────────────────
 
 @app.get("/hot-leads", response_class=HTMLResponse)
 async def hot_leads_page(request: Request, db: Session = Depends(get_db)):
     hot = (
         db.query(Lead)
         .filter(Lead.status.in_([
-            LeadStatus.RESPONDED, LeadStatus.CLICKED, LeadStatus.OPENED,
-            LeadStatus.CALLING, LeadStatus.CONNECTED,
+            LeadStatus.RESPONDED, LeadStatus.REPLIED, LeadStatus.CLICKED,
+            LeadStatus.OPENED, LeadStatus.CALLING, LeadStatus.CONNECTED,
         ]))
+        .order_by(desc(Lead.lead_score)).all()
+    )
+    from sheets_integration.client import is_sheets_configured
+    sheets_ok = is_sheets_configured()
+    return templates.TemplateResponse("hot_leads.html", {
+        "request": request, "hot_leads": hot,
+        "sheets_ok": sheets_ok,
+        "statuses": [s.value for s in LeadStatus],
+    })
+
+
+@app.post("/hot-leads/export-sheets")
+async def export_to_sheets(db: Session = Depends(get_db)):
+    from sheets_integration.exporter import export_hot_leads_to_sheets
+    try:
+        result = export_hot_leads_to_sheets(db)
+        return JSONResponse(result)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ─── ⑦ テレアポ架電管理 ──────────────────────────────────────
+
+@app.get("/calls", response_class=HTMLResponse)
+async def calls_page(request: Request, db: Session = Depends(get_db)):
+    """コール管理画面: 今日架電すべきリストを優先度順に表示"""
+    from datetime import date, timedelta
+
+    # 再架電予定が今日以前のもの + ホットリード
+    today = datetime.utcnow().replace(hour=23, minute=59)
+
+    call_targets = (
+        db.query(Lead)
+        .filter(
+            Lead.status.in_([
+                LeadStatus.RESPONDED, LeadStatus.REPLIED, LeadStatus.CLICKED,
+                LeadStatus.CALLING, LeadStatus.CONNECTED, LeadStatus.EMAIL_SENT,
+                LeadStatus.FOLLOWUP_SENT,
+            ])
+        )
         .order_by(desc(Lead.lead_score))
         .all()
     )
-    return templates.TemplateResponse("hot_leads.html", {
-        "request": request, "hot_leads": hot,
+
+    # 再架電予定日でソート
+    def sort_key(lead):
+        # 最新コールログの再架電日
+        if lead.call_logs:
+            last_call = sorted(lead.call_logs, key=lambda c: c.called_at or datetime.min, reverse=True)[0]
+            if last_call.next_action_date:
+                return (0, -lead.lead_score)
+        # HOT（反響あり）を最優先
+        if lead.status in (LeadStatus.RESPONDED, LeadStatus.REPLIED):
+            return (-1, -lead.lead_score)
+        return (1, -lead.lead_score)
+
+    call_targets.sort(key=sort_key)
+
+    today_logs = (
+        db.query(CallLog)
+        .filter(CallLog.called_at >= datetime.utcnow().replace(hour=0, minute=0))
+        .order_by(desc(CallLog.called_at))
+        .all()
+    )
+
+    return templates.TemplateResponse("calls.html", {
+        "request": request,
+        "call_targets": call_targets,
+        "today_logs": today_logs,
         "statuses": [s.value for s in LeadStatus],
     })
 
@@ -279,17 +475,13 @@ async def log_call(
             pass
 
     call = CallLog(
-        lead_id=lead_id,
-        caller_name=caller_name,
-        result=result,
-        next_action=next_action,
-        next_action_date=next_dt,
-        notes=notes,
+        lead_id=lead_id, caller_name=caller_name,
+        result=result, next_action=next_action,
+        next_action_date=next_dt, notes=notes,
         duration_seconds=duration_seconds,
     )
     db.add(call)
 
-    # ステータス更新
     status_map = {
         "アポ獲得": LeadStatus.MEETING_SET,
         "お断り": LeadStatus.REJECTED,
@@ -297,88 +489,99 @@ async def log_call(
         "再架電": LeadStatus.CALLING,
         "折り返し": LeadStatus.CALLING,
     }
-    new_status = status_map.get(result)
-    if new_status:
+    if new_status := status_map.get(result):
         lead.status = new_status
 
     db.commit()
     return JSONResponse({"success": True})
 
 
-# ─── トラッキングエンドポイント ───────────────────────────────
+# ─── ⑧ 結果記録・分析 ────────────────────────────────────────
 
-@app.get("/track/open/{token}")
-async def track_open(token: str, request: Request, db: Session = Depends(get_db)):
-    ip = request.client.host if request.client else ""
-    ua = request.headers.get("user-agent", "")
-    record_open(db, token, ip, ua)
-    # 1x1透過GIF
-    gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
-    return Response(content=gif, media_type="image/gif")
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request, db: Session = Depends(get_db)):
+    stats = _get_stats(db)
 
+    opened = db.query(func.count(OutreachLog.id)).filter(OutreachLog.opened_at.isnot(None)).scalar()
+    clicked = db.query(func.count(OutreachLog.id)).filter(OutreachLog.clicked_at.isnot(None)).scalar()
+    replied = db.query(func.count(OutreachLog.id)).filter(OutreachLog.replied_at.isnot(None)).scalar()
+    followups = db.query(func.count(FollowUpLog.id)).filter(FollowUpLog.result == "sent").scalar()
 
-@app.get("/track/click/{token}")
-async def track_click(
-    token: str, request: Request,
-    url: str = Query(...),
-    db: Session = Depends(get_db),
-):
-    ip = request.client.host if request.client else ""
-    ua = request.headers.get("user-agent", "")
-    redirect_url = record_click(db, token, url, ip, ua)
-    return RedirectResponse(redirect_url)
+    sent = stats["sent"]
+    reply_rate = round(replied / sent * 100, 1) if sent > 0 else 0
+    click_rate = round(clicked / sent * 100, 1) if sent > 0 else 0
+    apo_rate = round(stats["meetings"] / stats["calls"] * 100, 1) if stats["calls"] > 0 else 0
 
+    status_dist = (
+        db.query(Lead.status, func.count(Lead.id))
+        .group_by(Lead.status)
+        .all()
+    )
 
-@app.get("/form/{token}", response_class=HTMLResponse)
-async def inquiry_form(token: str, request: Request):
-    return templates.TemplateResponse("inquiry_form.html", {
-        "request": request, "token": token,
+    call_results = (
+        db.query(CallLog.result, func.count(CallLog.id))
+        .group_by(CallLog.result)
+        .all()
+    )
+
+    from sheets_integration.client import is_sheets_configured
+    sheets_ok = is_sheets_configured()
+
+    return templates.TemplateResponse("analytics.html", {
+        "request": request,
+        "stats": stats,
+        "opened": opened, "clicked": clicked, "replied": replied,
+        "followups": followups,
+        "reply_rate": reply_rate, "click_rate": click_rate, "apo_rate": apo_rate,
+        "status_dist": status_dist, "call_results": call_results,
+        "sheets_ok": sheets_ok,
     })
 
 
-@app.post("/form/{token}/submit")
-async def submit_form(
-    token: str, request: Request,
-    name: str = Form(...),
-    company: str = Form(...),
-    email: str = Form(...),
-    phone: str = Form(""),
-    message: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    ip = request.client.host if request.client else ""
-    form_data = {"name": name, "company": company, "email": email, "phone": phone, "message": message}
-    record_form_submit(db, token, form_data, ip)
-    return templates.TemplateResponse("form_thanks.html", {"request": request})
+@app.post("/analytics/export-sheets")
+async def export_analytics(db: Session = Depends(get_db)):
+    from sheets_integration.exporter import write_analytics_to_sheets, sync_call_logs_to_sheets
+    try:
+        r1 = write_analytics_to_sheets(db)
+        r2 = sync_call_logs_to_sheets(db)
+        return JSONResponse({**r1, **r2})
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
-@app.get("/unsubscribe/{token}")
-async def unsubscribe(token: str, db: Session = Depends(get_db)):
-    record_unsubscribe(db, token)
-    return HTMLResponse("<html><body><p>配信停止しました。ご迷惑をおかけして申し訳ございません。</p></body></html>")
+# ─── スケジューラ手動実行 ────────────────────────────────────
+
+@app.post("/scheduler/run/{job_id}")
+async def run_scheduler_job(job_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    def _run():
+        from database.db import SessionLocal
+        session = SessionLocal()
+        try:
+            if job_id == "follow_up":
+                from scheduler.follow_up import check_and_send_followups
+                check_and_send_followups(session)
+            elif job_id == "gmail_reply_check":
+                from scheduler.follow_up import run_gmail_reply_check
+                run_gmail_reply_check(session)
+            elif job_id == "sheets_export":
+                from scheduler.follow_up import run_sheets_export
+                run_sheets_export(session)
+            session.commit()
+        finally:
+            session.close()
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"message": f"{job_id} を手動実行しました"})
 
 
-# ─── API (JSON) ─────────────────────────────────────────────
+# ─── API ────────────────────────────────────────────────────
 
 @app.get("/api/stats")
 async def api_stats(db: Session = Depends(get_db)):
     return _get_stats(db)
 
 
-@app.get("/api/leads/hot")
-async def api_hot_leads(db: Session = Depends(get_db)):
-    hot = (
-        db.query(Lead)
-        .filter(Lead.status == LeadStatus.RESPONDED)
-        .order_by(desc(Lead.lead_score))
-        .all()
-    )
-    return [
-        {
-            "id": l.id, "company_name": l.company_name, "industry": l.industry,
-            "contact_name": l.contact_name, "contact_phone": l.contact_phone or l.company_phone,
-            "lead_score": l.lead_score, "status": l.status,
-            "recommended_service": l.recommended_service,
-        }
-        for l in hot
-    ]
+@app.get("/api/scheduler/status")
+async def api_scheduler_status():
+    from scheduler.runner import get_scheduler_status
+    return get_scheduler_status()
