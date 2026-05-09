@@ -102,6 +102,9 @@ async def scraper_page(request: Request, db: Session = Depends(get_db)):
     pending = db.query(func.count(Lead.id)).filter(
         Lead.scrape_status == ScrapeStatus.PENDING, Lead.website.isnot(None)
     ).scalar()
+    no_url = db.query(func.count(Lead.id)).filter(
+        Lead.scrape_status == ScrapeStatus.PENDING, Lead.website.is_(None)
+    ).scalar()
     done = db.query(func.count(Lead.id)).filter(Lead.scrape_status == ScrapeStatus.DONE).scalar()
     failed = db.query(func.count(Lead.id)).filter(Lead.scrape_status == ScrapeStatus.FAILED).scalar()
     recent_jobs = (
@@ -109,7 +112,7 @@ async def scraper_page(request: Request, db: Session = Depends(get_db)):
     )
     return templates.TemplateResponse("scraper.html", {
         "request": request,
-        "pending": pending, "done": done, "failed": failed,
+        "pending": pending, "no_url": no_url, "done": done, "failed": failed,
         "recent_jobs": recent_jobs, "settings": settings,
     })
 
@@ -139,14 +142,29 @@ async def run_scraper(
         finally:
             session.close()
 
+    # 実際に処理できるリード数を事前確認
+    candidate_count = db.query(func.count(Lead.id)).filter(
+        Lead.scrape_status == ScrapeStatus.PENDING,
+        Lead.website.isnot(None),
+    ).scalar()
+    no_url_count = db.query(func.count(Lead.id)).filter(
+        Lead.scrape_status == ScrapeStatus.PENDING,
+        Lead.website.is_(None),
+    ).scalar()
+
+    if candidate_count == 0:
+        msg = f"⚠️ 対象リードが0件です。URLが登録されているリードがありません（URLなし: {no_url_count}件）"
+        return JSONResponse({"message": msg})
+
     opts = []
     if do_sns_deep:
         opts.append("SNS深掘り")
     if do_diagnosis:
         opts.append("Claude診断")
     opt_str = f"（{'/'.join(opts)}）" if opts else ""
+    actual = min(limit, candidate_count)
     background_tasks.add_task(_run)
-    return JSONResponse({"message": f"スクレイピング開始（最大{limit}件）{opt_str}"})
+    return JSONResponse({"message": f"✅ スクレイピング開始: {actual}件処理します{opt_str}（URL無しでスキップ: {no_url_count}件）"})
 
 
 @app.post("/scraper/lead/{lead_id}")

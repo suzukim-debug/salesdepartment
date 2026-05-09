@@ -7,10 +7,17 @@
 </div>
 
 <div class="row g-3 mb-4">
-  <div class="col-md-4"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-warning">{{ pending }}</div><div class="text-muted small">未スクレイピング（URL保有）</div></div></div>
-  <div class="col-md-4"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-success">{{ done }}</div><div class="text-muted small">スクレイピング完了</div></div></div>
-  <div class="col-md-4"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-danger">{{ failed }}</div><div class="text-muted small">失敗（URL無効等）</div></div></div>
+  <div class="col-md-3"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-warning">{{ pending }}</div><div class="text-muted small">未処理（URL保有）</div></div></div>
+  <div class="col-md-3"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-secondary">{{ no_url }}</div><div class="text-muted small">URLなし（スキップ）</div></div></div>
+  <div class="col-md-3"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-success">{{ done }}</div><div class="text-muted small">スクレイピング完了</div></div></div>
+  <div class="col-md-3"><div class="card border-0 shadow-sm text-center py-3"><div class="fw-bold fs-4 text-danger">{{ failed }}</div><div class="text-muted small">失敗（URL無効等）</div></div></div>
 </div>
+{% if no_url > 0 and pending == 0 %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle me-2"></i>
+  URLが登録されているリードが0件のため、スクレイピングできません。CSVにウェブサイトURLが含まれているか確認してください。
+</div>
+{% endif %}
 
 <div class="row g-4">
   <div class="col-lg-5">
