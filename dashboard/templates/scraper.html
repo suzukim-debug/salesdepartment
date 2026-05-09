@@ -35,6 +35,23 @@
             <option value="50">50件</option>
           </select>
         </div>
+        <div class="mb-3">
+          <label class="form-label small d-flex justify-content-between">
+            <span>実行オプション</span>
+          </label>
+          <div class="form-check form-switch mb-1">
+            <input class="form-check-input" type="checkbox" id="optSnsDep" checked>
+            <label class="form-check-label small" for="optSnsDep">
+              <i class="bi bi-instagram text-danger me-1"></i>SNSページ深掘り（各SNSへ実際にアクセス）
+            </label>
+          </div>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="optDiagnosis" checked>
+            <label class="form-check-label small" for="optDiagnosis">
+              <i class="bi bi-robot text-primary me-1"></i>Claude SNS診断レポート生成（APIコール発生）
+            </label>
+          </div>
+        </div>
         <button class="btn btn-primary w-100" id="runScrapeBtn">
           <i class="bi bi-play-circle me-1"></i>スクレイピング開始（バックグラウンド）
         </button>
@@ -92,7 +109,12 @@
 const settings_delay = {{ settings.scrape_delay_seconds }};
 document.getElementById("runScrapeBtn").addEventListener("click", async () => {
   const limit = document.getElementById("scrapeLimit").value;
-  const fd = new FormData(); fd.append("limit", limit);
+  const snsDep = document.getElementById("optSnsDep").checked;
+  const diagnosis = document.getElementById("optDiagnosis").checked;
+  const fd = new FormData();
+  fd.append("limit", limit);
+  fd.append("run_sns_deep", snsDep ? "1" : "0");
+  fd.append("run_sns_diagnosis", diagnosis ? "1" : "0");
   const btn = document.getElementById("runScrapeBtn");
   btn.disabled = true; btn.textContent = "実行中...";
   const r = await fetch("/scraper/run", {method:"POST", body:fd});

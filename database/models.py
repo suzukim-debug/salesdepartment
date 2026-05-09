@@ -89,6 +89,11 @@ class Lead(Base):
     scraped_at = Column(DateTime)
     scrape_error = Column(Text)
 
+    # SNS深掘り分析
+    sns_raw_data = Column(JSON)                   # 各SNSページのスクレイピング生データ
+    sns_diagnosis = Column(JSON)                  # Claude生成のSNS診断レポート
+    sns_analyzed_at = Column(DateTime)            # SNS分析実施日時
+
     # Gmail連携
     gmail_thread_ids = Column(JSON, default=list)  # 送信スレッドID一覧
 

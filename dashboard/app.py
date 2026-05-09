@@ -115,20 +115,35 @@ async def scraper_page(request: Request, db: Session = Depends(get_db)):
 async def run_scraper(
     background_tasks: BackgroundTasks,
     limit: int = Form(10),
+    run_sns_deep: str = Form("1"),
+    run_sns_diagnosis: str = Form("1"),
     db: Session = Depends(get_db),
 ):
     """バックグラウンドでスクレイピングを実行"""
+    do_sns_deep = run_sns_deep == "1"
+    do_diagnosis = run_sns_diagnosis == "1"
+
     def _run():
         from database.db import SessionLocal
         from scraper.orchestrator import run_batch_scrape
         session = SessionLocal()
         try:
-            run_batch_scrape(session, limit=limit)
+            run_batch_scrape(
+                session, limit=limit,
+                run_sns_deep=do_sns_deep,
+                run_sns_diagnosis=do_diagnosis,
+            )
         finally:
             session.close()
 
+    opts = []
+    if do_sns_deep:
+        opts.append("SNS深掘り")
+    if do_diagnosis:
+        opts.append("Claude診断")
+    opt_str = f"（{'/'.join(opts)}）" if opts else ""
     background_tasks.add_task(_run)
-    return JSONResponse({"message": f"スクレイピング開始（最大{limit}件）"})
+    return JSONResponse({"message": f"スクレイピング開始（最大{limit}件）{opt_str}"})
 
 
 @app.post("/scraper/lead/{lead_id}")
@@ -201,6 +216,55 @@ async def lead_detail(request: Request, lead_id: int, db: Session = Depends(get_
         "request": request, "lead": lead,
         "statuses": [s.value for s in LeadStatus],
     })
+
+
+@app.get("/leads/{lead_id}/sns", response_class=HTMLResponse)
+async def sns_diagnosis_page(request: Request, lead_id: int, db: Session = Depends(get_db)):
+    """SNS診断レポートページ"""
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(404)
+    diagnosis = lead.sns_diagnosis or {}
+    sns_raw = lead.sns_raw_data or {}
+    diagnosed_at = (
+        lead.sns_analyzed_at.strftime("%Y/%m/%d %H:%M") if lead.sns_analyzed_at else "未実施"
+    )
+    return templates.TemplateResponse("sns_diagnosis.html", {
+        "request": request, "lead": lead,
+        "diagnosis": diagnosis if diagnosis else None,
+        "sns_raw": sns_raw,
+        "diagnosed_at": diagnosed_at,
+    })
+
+
+@app.post("/leads/{lead_id}/sns-diagnosis")
+async def run_sns_diagnosis(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """SNS深掘り分析 + Claude診断を実行（バックグラウンド）"""
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(404)
+
+    def _run():
+        from database.db import SessionLocal
+        from scraper.orchestrator import run_sns_analysis_only
+        session = SessionLocal()
+        try:
+            lead_obj = session.query(Lead).filter(Lead.id == lead_id).first()
+            run_sns_analysis_only(lead_obj, session)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"SNS diagnosis bg error: {e}")
+        finally:
+            session.close()
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"success": True, "message": "SNS診断を開始しました"})
 
 
 @app.post("/leads/{lead_id}/status")

@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+{% block title %}SNS診断 - {{ lead.company_name }}{% endblock %}
+{% block content %}
+<div class="mb-3 d-flex gap-2 align-items-center">
+  <a href="/leads/{{ lead.id }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i> 詳細に戻る</a>
+  <h5 class="mb-0 fw-bold ms-2">SNS診断レポート: {{ lead.company_name }}</h5>
+</div>
+
+{% if not diagnosis %}
+<div class="card border-0 shadow-sm">
+  <div class="card-body text-center py-5">
+    <i class="bi bi-robot" style="font-size:40px; color:#ccc;"></i>
+    <p class="mt-3 text-muted">まだSNS診断が実行されていません</p>
+    <button class="btn btn-primary" id="runDiagBtn" onclick="runDiagnosis({{ lead.id }})">
+      <i class="bi bi-search me-1"></i>SNSを調査して診断を開始
+    </button>
+    <div id="diagProgress" class="mt-3 d-none">
+      <div class="spinner-border text-primary"></div>
+      <p class="text-muted mt-2 small">各SNSページを訪問中... (1〜3分かかります)</p>
+    </div>
+  </div>
+</div>
+{% else %}
+
+{# スコアバー #}
+{% set current = diagnosis.get('overall_score', 0) %}
+{% set potential = diagnosis.get('potential_score', 0) %}
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card border-0 shadow-sm text-center py-3">
+      <div class="fw-bold fs-1 {% if current >= 70 %}text-success{% elif current >= 40 %}text-warning{% else %}text-danger{% endif %}">
+        {{ current }}
+      </div>
+      <div class="text-muted small">現状 SNS運用スコア</div>
+      <div class="progress mt-2 mx-3" style="height:8px;">
+        <div class="progress-bar {% if current >= 70 %}bg-success{% elif current >= 40 %}bg-warning{% else %}bg-danger{% endif %}"
+             style="width:{{ current }}%"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card border-0 shadow-sm text-center py-3 border-primary border-2">
+      <div class="fw-bold fs-1 text-primary">{{ potential }}</div>
+      <div class="text-muted small">施策実施後 達成可能スコア</div>
+      <div class="progress mt-2 mx-3" style="height:8px;">
+        <div class="progress-bar bg-primary" style="width:{{ potential }}%"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card border-0 shadow-sm text-center py-3">
+      <div class="fw-bold fs-1 text-success">+{{ potential - current }}</div>
+      <div class="text-muted small">改善ポテンシャル</div>
+      <div class="mt-2 small text-muted">{{ diagnosis.get('competitor_gap', '') }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- 左カラム -->
+  <div class="col-lg-7">
+    <!-- 診断サマリー -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-clipboard-data me-1"></i>診断サマリー</h6>
+      </div>
+      <div class="card-body">
+        <p class="mb-0" style="font-size:14px; line-height:1.8;">{{ diagnosis.get('diagnosis_summary', '') }}</p>
+      </div>
+    </div>
+
+    <!-- 重大な問題点 -->
+    {% set issues = diagnosis.get('critical_issues', []) %}
+    {% if issues %}
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-exclamation-triangle text-danger me-1"></i>検出された問題点 ({{ issues | length }}件)</h6>
+      </div>
+      <div class="card-body p-0">
+        <ul class="list-group list-group-flush">
+        {% for issue in issues %}
+        <li class="list-group-item py-2">
+          <div class="d-flex align-items-start gap-2">
+            <span class="badge mt-1 {% if issue.severity == 'high' %}bg-danger{% elif issue.severity == 'medium' %}bg-warning text-dark{% else %}bg-secondary{% endif %}" style="font-size:10px; white-space:nowrap;">
+              {{ issue.platform }}
+            </span>
+            <div>
+              <div style="font-size:13px; font-weight:500;">{{ issue.issue }}</div>
+              <div class="text-muted" style="font-size:12px;">影響: {{ issue.impact }}</div>
+            </div>
+          </div>
+        </li>
+        {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- 改善施策 -->
+    {% set proposals = diagnosis.get('improvement_proposals', []) %}
+    {% if proposals %}
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-lightbulb text-warning me-1"></i>改善施策提案 ({{ proposals | length }}件)</h6>
+      </div>
+      <div class="card-body p-0">
+        {% for p in proposals %}
+        <div class="border-bottom p-3 {% if loop.last %}border-0{% endif %}">
+          <div class="d-flex justify-content-between align-items-start mb-1">
+            <div class="fw-bold" style="font-size:14px;">{{ p.title }}</div>
+            <div class="d-flex gap-1">
+              <span class="badge bg-light text-dark border" style="font-size:10px;">{{ p.platform }}</span>
+              <span class="badge {% if p.difficulty == 'easy' %}bg-success{% elif p.difficulty == 'medium' %}bg-warning text-dark{% else %}bg-danger{% endif %}" style="font-size:10px;">
+                {{ '簡単' if p.difficulty == 'easy' else ('中級' if p.difficulty == 'medium' else '高度') }}
+              </span>
+            </div>
+          </div>
+          <p class="text-muted mb-1" style="font-size:13px;">{{ p.detail }}</p>
+          <div class="d-flex gap-3" style="font-size:12px;">
+            <span class="text-success"><i class="bi bi-graph-up me-1"></i>{{ p.expected_result }}</span>
+            <span class="text-muted"><i class="bi bi-clock me-1"></i>{{ p.timeline }}</span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- 右カラム -->
+  <div class="col-lg-5">
+    <!-- クイックウィン -->
+    {% set quick_wins = diagnosis.get('quick_wins', []) %}
+    {% if quick_wins %}
+    <div class="card border-0 shadow-sm mb-3 border-success border-2">
+      <div class="card-header bg-success text-white border-0 py-2">
+        <h6 class="mb-0"><i class="bi bi-lightning-fill me-1"></i>今週すぐできる改善</h6>
+      </div>
+      <div class="card-body">
+        {% for win in quick_wins %}
+        <div class="d-flex align-items-start gap-2 mb-2">
+          <span class="badge bg-success rounded-circle" style="width:22px;height:22px;font-size:11px;padding:4px;">{{ loop.index }}</span>
+          <div style="font-size:13px;">{{ win }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- 各SNSの実データ -->
+    {% if sns_raw %}
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">SNS実態データ（取得値）</h6>
+      </div>
+      <div class="card-body p-0">
+        <ul class="list-group list-group-flush" style="font-size:12px;">
+          {% set ig = sns_raw.get('instagram') %}
+          {% if ig and not ig.get('error') %}
+          <li class="list-group-item py-2">
+            <div class="d-flex justify-content-between">
+              <strong><i class="bi bi-instagram text-danger me-1"></i>Instagram</strong>
+              <span>@{{ ig.get('username', '?') }}</span>
+            </div>
+            <div class="text-muted mt-1">
+              フォロワー: {{ "{:,}".format(ig.followers) if ig.get('followers') else '不明' }}人 /
+              投稿数: {{ ig.get('post_count', '?') }}件 /
+              頻度: {{ ig.get('post_frequency_hint', '?') }}<br>
+              エンゲージメント率: {{ ig.get('engagement_rate_estimate', '?') }}% /
+              最終投稿: {{ ig.get('last_post_hint', '?') }}
+            </div>
+          </li>
+          {% endif %}
+          {% set tt = sns_raw.get('tiktok') %}
+          {% if tt and not tt.get('error') %}
+          <li class="list-group-item py-2">
+            <div class="d-flex justify-content-between">
+              <strong><i class="bi bi-tiktok me-1"></i>TikTok</strong>
+              <span>@{{ tt.get('username', '?') }}</span>
+            </div>
+            <div class="text-muted mt-1">
+              フォロワー: {{ "{:,}".format(tt.followers) if tt.get('followers') else '不明' }}人 /
+              動画: {{ tt.get('video_count', '?') }}本 /
+              総いいね: {{ "{:,}".format(tt.total_likes) if tt.get('total_likes') else '?' }}
+            </div>
+          </li>
+          {% endif %}
+          {% set yt = sns_raw.get('youtube') %}
+          {% if yt and not yt.get('error') %}
+          <li class="list-group-item py-2">
+            <div class="fw-bold"><i class="bi bi-youtube text-danger me-1"></i>YouTube</div>
+            <div class="text-muted mt-1">
+              登録者: {{ yt.get('subscribers', '?') }} /
+              動画数: {{ yt.get('video_count', '?') }} /
+              頻度: {{ yt.get('upload_frequency_hint', '?') }}<br>
+              平均再生: {{ "{:,}".format(yt.avg_views_per_video) if yt.get('avg_views_per_video') else '?' }}回
+            </div>
+          </li>
+          {% endif %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- アクション -->
+    <div class="card border-0 shadow-sm">
+      <div class="card-body">
+        <div class="d-grid gap-2">
+          <button class="btn btn-primary" onclick="openEmailCompose({{ lead.id }})">
+            <i class="bi bi-stars me-1"></i>この診断を活かしてAIメール生成
+          </button>
+          <button class="btn btn-outline-secondary" onclick="runDiagnosis({{ lead.id }})">
+            <i class="bi bi-arrow-clockwise me-1"></i>再診断（SNS再取得）
+          </button>
+          <a href="/leads/{{ lead.id }}" class="btn btn-outline-secondary">
+            <i class="bi bi-person me-1"></i>リード詳細に戻る
+          </a>
+        </div>
+        <div class="mt-2 small text-muted text-center">
+          診断日時: {{ diagnosed_at }}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script>
+async function runDiagnosis(leadId) {
+  const btn = document.getElementById("runDiagBtn");
+  const progress = document.getElementById("diagProgress");
+  if (btn) { btn.disabled = true; btn.textContent = "分析中..."; }
+  if (progress) progress.classList.remove("d-none");
+
+  const r = await fetch(`/leads/${leadId}/sns-diagnosis`, {method: "POST"});
+  const d = await r.json();
+  if (d.success) {
+    location.reload();
+  } else {
+    alert("診断エラー: " + (d.error || "不明なエラー"));
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-search me-1"></i>SNSを調査して診断を開始'; }
+    if (progress) progress.classList.add("d-none");
+  }
+}
+
+function openEmailCompose(leadId) {
+  // outreachページでこのリードが選択された状態で開く
+  window.location.href = `/outreach?compose=${leadId}`;
+}
+</script>
+{% endblock %}

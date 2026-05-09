@@ -1,8 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ lead.company_name }} - 詳細{% endblock %}
 {% block content %}
-<div class="mb-3">
+<div class="mb-3 d-flex gap-2">
   <a href="/leads" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i> 一覧に戻る</a>
+  <a href="/leads/{{ lead.id }}/sns" class="btn btn-sm {% if lead.sns_diagnosis %}btn-success{% else %}btn-outline-primary{% endif %}">
+    <i class="bi bi-{% if lead.sns_diagnosis %}check-circle{% else %}search{% endif %} me-1"></i>
+    {% if lead.sns_diagnosis %}SNS診断済み (スコア{{ lead.sns_diagnosis.get('overall_score', '?') }}){% else %}SNS診断を実行{% endif %}
+  </a>
 </div>
 
 <div class="row g-3">
