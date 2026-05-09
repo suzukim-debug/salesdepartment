@@ -23,7 +23,7 @@
         <input type="text" name="industry" class="form-control form-control-sm" placeholder="業種で絞り込み" value="{{ current_industry or '' }}">
       </div>
       <div class="col-md-2">
-        <input type="number" name="min_score" class="form-control form-control-sm" placeholder="最低スコア" value="{{ min_score if min_score > 0 else '' }}" min="0" max="100">
+        <input type="number" name="min_score" class="form-control form-control-sm" placeholder="最低スコア" value="{{ min_score if min_score else '' }}" min="0" max="100">
       </div>
       <div class="col-md-1">
         <button type="submit" class="btn btn-primary btn-sm w-100">検索</button>
