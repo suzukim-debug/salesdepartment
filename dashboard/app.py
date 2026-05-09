@@ -658,13 +658,18 @@ async def discover_run(
     max_results: int = Form(20),
     db: Session = Depends(get_db),
 ):
+    import asyncio
     from scraper.maps_scraper import scrape_google_maps, import_maps_results
     try:
-        results = scrape_google_maps(
-            keyword=keyword,
-            area=area,
-            industry=industry or keyword,
-            max_results=max_results,
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None,
+            lambda: scrape_google_maps(
+                keyword=keyword,
+                area=area,
+                industry=industry or keyword,
+                max_results=max_results,
+            )
         )
         if not results:
             return JSONResponse({"error": "企業が見つかりませんでした。キーワードやエリアを変えてお試しください。", "created": 0, "skipped": 0})
