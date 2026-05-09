@@ -94,7 +94,7 @@
         <table class="table table-sm mb-0" style="font-size:12px;">
           <thead class="table-light"><tr><th>送信日時</th><th>件名</th><th>開封</th><th>クリック</th><th>反響</th></tr></thead>
           <tbody>
-          {% for ol in lead.outreach_logs | sort(attribute='sent_at', reverse=True) %}
+          {% for ol in (lead.outreach_logs | selectattr('sent_at') | sort(attribute='sent_at', reverse=True) | list) + (lead.outreach_logs | rejectattr('sent_at') | list) %}
           <tr>
             <td>{{ ol.sent_at.strftime('%m/%d %H:%M') if ol.sent_at else '未送信' }}</td>
             <td>{{ ol.subject }}</td>
