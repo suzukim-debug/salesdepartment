@@ -1,154 +1,159 @@
 """
-Googleマップから企業リストを自動収集してLeadとして登録する
-Windows ProactorEventLoop対応版 - Playwrightを別スレッドで実行
+NTTタウンページ（itp.ne.jp）から企業リストを自動収集してLeadとして登録する
+Playwright不要 - httpx + BeautifulSoup のみ使用
 """
-import sys
 import logging
 import asyncio
-import traceback
-import concurrent.futures
+import time
+import re
 from typing import Optional
 from sqlalchemy.orm import Session
+import httpx
+from bs4 import BeautifulSoup
 from database.models import Lead, LeadStatus, ScrapeStatus
 from lead_generator.scorer import score_lead
 
 logger = logging.getLogger(__name__)
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ja,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
-async def _scrape_async(keyword: str, area: str, industry: str, max_results: int) -> list[dict]:
-    """Playwright async スクレイピング本体"""
-    from playwright.async_api import async_playwright
 
-    query = f"{area} {keyword}"
+def _scrape_itp(keyword: str, area: str, industry: str, max_results: int) -> list[dict]:
+    """itp.ne.jp（NTTタウンページ）から企業情報を収集する"""
     results = []
+    query = f"{area} {keyword}"
+    start = 1
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            locale="ja-JP",
-        )
-
-        try:
-            search_url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
-            logger.info(f"Navigating: {search_url}")
-            await page.goto(search_url, timeout=30000)
-            await asyncio.sleep(3)
-
-            # Cookie同意ダイアログを閉じる
-            for selector in [
-                'button:has-text("すべて同意")',
-                'button:has-text("Accept all")',
-                'button[aria-label*="同意"]',
-                'form[action*="consent"] button',
-            ]:
-                try:
-                    btn = page.locator(selector).first
-                    if await btn.is_visible(timeout=2000):
-                        await btn.click()
-                        await asyncio.sleep(2)
-                        break
-                except Exception:
-                    pass
-
-            # フィードを待つ
+    with httpx.Client(headers=HEADERS, timeout=15, follow_redirects=True) as client:
+        while len(results) < max_results:
             try:
-                await page.locator('[role="feed"]').wait_for(timeout=12000)
-            except Exception:
-                logger.warning("フィードが見つかりません")
-                logger.info(f"Page title: {await page.title()}")
-                return results
+                resp = client.get(
+                    "https://itp.ne.jp/service/SS0001/",
+                    params={"sKey": query, "sStartCount": str(start)},
+                )
+                resp.raise_for_status()
+            except Exception as e:
+                logger.error(f"itp.ne.jp fetch error: {e}")
+                break
 
-            # スクロールして件数を増やす
-            feed = page.locator('[role="feed"]')
-            for _ in range(6):
-                cnt = await page.locator('[role="feed"] a[href*="/maps/place"]').count()
-                logger.info(f"件数: {cnt}")
-                if cnt >= max_results:
-                    break
-                await feed.evaluate("el => el.scrollBy(0, 1000)")
-                await asyncio.sleep(1.5)
+            soup = BeautifulSoup(resp.text, "lxml")
 
-            # aria-label付きリンクで企業名を取得
-            links = await page.locator('[role="feed"] a[href*="/maps/place"][aria-label]').all()
-            logger.info(f"リンク数: {len(links)}")
+            # 企業リストを抽出（複数セレクタ対応）
+            items = (
+                soup.select(".shopDataBox")
+                or soup.select(".p-shopItem")
+                or soup.select("article.shop")
+                or soup.select("[class*='shopItem']")
+                or soup.select("[class*='Shop']")
+            )
 
-            for i, link in enumerate(links[:max_results]):
-                try:
-                    company_name = (await link.get_attribute("aria-label") or "").strip()
-                    if not company_name:
-                        continue
+            if not items:
+                logger.warning(f"itp.ne.jp: セレクタが合いません。page={start}")
+                # デバッグ: ページタイトルを確認
+                title = soup.find("title")
+                logger.info(f"Page title: {title.get_text() if title else 'N/A'}")
+                break
 
-                    await link.click()
-                    await asyncio.sleep(2)
-
-                    address = phone = website = None
-                    maps_url = page.url
-
-                    try:
-                        addr = page.locator('[data-item-id="address"] .fontBodyMedium, button[data-item-id="address"]').first
-                        address = (await addr.text_content(timeout=3000) or "").strip() or None
-                    except Exception:
-                        pass
-
-                    try:
-                        for tel_sel in [
-                            '[data-item-id^="phone:tel"] .fontBodyMedium',
-                            '[data-tooltip="電話番号をコピー"] .fontBodyMedium',
-                        ]:
-                            tel = page.locator(tel_sel).first
-                            phone = (await tel.text_content(timeout=2000) or "").strip() or None
-                            if phone:
-                                break
-                    except Exception:
-                        pass
-
-                    try:
-                        web = page.locator('a[data-item-id="authority"]').first
-                        website = await web.get_attribute("href", timeout=2000)
-                    except Exception:
-                        pass
-
-                    results.append({
-                        "company_name": company_name,
-                        "address": address,
-                        "company_phone": phone,
-                        "website": website,
-                        "maps_url": maps_url,
-                        "industry": industry,
-                        "area": area,
-                    })
-                    logger.info(f"[{i+1}] {company_name} / {address}")
-
-                except Exception as e:
-                    logger.warning(f"item[{i}] error: {e}")
+            for item in items:
+                # 企業名
+                name_el = (
+                    item.select_one("h3")
+                    or item.select_one("h2")
+                    or item.select_one("[class*='shopName']")
+                    or item.select_one("[class*='Name']")
+                    or item.select_one("a[href*='/detail/']")
+                )
+                company_name = name_el.get_text(strip=True) if name_el else ""
+                if not company_name:
                     continue
 
-        finally:
-            await browser.close()
+                # 住所
+                addr_el = (
+                    item.select_one("[class*='address']")
+                    or item.select_one("[class*='Address']")
+                    or item.select_one("[class*='addr']")
+                )
+                address = addr_el.get_text(strip=True) if addr_el else None
 
-    return results
+                # 電話番号
+                tel_el = (
+                    item.select_one("[class*='tel']")
+                    or item.select_one("[class*='Tel']")
+                    or item.select_one("[class*='phone']")
+                )
+                phone = tel_el.get_text(strip=True) if tel_el else None
+                if not phone:
+                    # テキストから電話番号パターンを探す
+                    m = re.search(r'0\d[\d\-]{8,11}', item.get_text())
+                    phone = m.group(0) if m else None
+
+                # ウェブサイト
+                web_el = item.select_one("a[href^='http']:not([href*='itp.ne.jp'])")
+                website = web_el["href"] if web_el else None
+
+                results.append({
+                    "company_name": company_name,
+                    "address": address,
+                    "company_phone": phone,
+                    "website": website,
+                    "industry": industry,
+                    "area": area,
+                })
+                logger.info(f"収集: {company_name} / {address} / {phone}")
+
+            if len(items) < 10:
+                break  # 最終ページ
+            start += 10
+            time.sleep(1.0)
+
+    return results[:max_results]
 
 
-def _run_in_new_loop(keyword: str, area: str, industry: str, max_results: int) -> list[dict]:
-    """Windowsの ProactorEventLoop で Playwright を動かす（別スレッド用）"""
-    if sys.platform == "win32":
-        loop = asyncio.ProactorEventLoop()
-    else:
-        loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_scrape_async(keyword, area, industry, max_results))
-    except Exception as e:
-        logger.error(f"scrape error in thread: {e}\n{traceback.format_exc()}")
-        raise
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
+def _scrape_google_search(keyword: str, area: str, industry: str, max_results: int) -> list[dict]:
+    """Google検索結果から店舗情報を収集するフォールバック"""
+    results = []
+    query = f"{area} {keyword} 店舗一覧"
+
+    with httpx.Client(headers=HEADERS, timeout=15, follow_redirects=True) as client:
+        for page in range(0, min(3, max_results // 5 + 1)):
+            try:
+                resp = client.get(
+                    "https://www.google.com/search",
+                    params={"q": query, "start": str(page * 10), "hl": "ja"},
+                )
+                soup = BeautifulSoup(resp.text, "lxml")
+
+                # ローカルパック（Googleマップ掲載情報）
+                local_results = soup.select("div[data-local-attribute], .rllt__details, .VkpGBb")
+                for item in local_results:
+                    name_el = item.select_one("[role='heading'], h3, .dbg0pd")
+                    if name_el:
+                        addr_el = item.select_one(".rllt__details div:nth-child(2), .LrzXr")
+                        results.append({
+                            "company_name": name_el.get_text(strip=True),
+                            "address": addr_el.get_text(strip=True) if addr_el else None,
+                            "company_phone": None,
+                            "website": None,
+                            "industry": industry,
+                            "area": area,
+                        })
+
+                if len(results) >= max_results:
+                    break
+                time.sleep(2.0)
+            except Exception as e:
+                logger.error(f"Google search error: {e}")
+                break
+
+    return results[:max_results]
 
 
 async def scrape_google_maps(
@@ -157,13 +162,23 @@ async def scrape_google_maps(
     industry: str,
     max_results: int = 30,
 ) -> list[dict]:
-    """FastAPI async context から呼ぶ。Playwrightは別スレッドの独立したループで実行。"""
-    event_loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        results = await event_loop.run_in_executor(
-            executor,
-            lambda: _run_in_new_loop(keyword, area, industry, max_results),
+    """企業リストを収集する（itp.ne.jp → Googleフォールバック）"""
+    loop = asyncio.get_event_loop()
+
+    # itp.ne.jp で収集
+    results = await loop.run_in_executor(
+        None,
+        lambda: _scrape_itp(keyword, area, industry, max_results),
+    )
+
+    # itp.ne.jp で0件だったらGoogleで補完
+    if not results:
+        logger.info("itp.ne.jpで0件 → Google検索フォールバック")
+        results = await loop.run_in_executor(
+            None,
+            lambda: _scrape_google_search(keyword, area, industry, max_results),
         )
+
     return results
 
 
@@ -172,7 +187,7 @@ def import_maps_results(
     results: list[dict],
     source_keyword: str,
 ) -> dict:
-    """Googleマップ収集結果をLeadとしてDBに保存（重複スキップ）"""
+    """収集結果をLeadとしてDBに保存（重複スキップ）"""
     created = 0
     skipped = 0
 
@@ -193,7 +208,7 @@ def import_maps_results(
             website=r.get("website"),
             industry=r.get("industry"),
             prefecture=_extract_prefecture(r.get("address", "")),
-            source=f"googlemap:{source_keyword}",
+            source=f"discover:{source_keyword}",
             status=LeadStatus.NEW,
             scrape_status=ScrapeStatus.PENDING,
         )
