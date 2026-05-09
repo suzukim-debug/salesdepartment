@@ -81,8 +81,13 @@ def _build_prompt_with_sns_diagnosis(lead: Lead, service: ServiceType, diagnosis
     ig_freq = ig.get("post_frequency_hint", "不明") if ig else "不明"
     ig_engagement = ig.get("engagement_rate_estimate", "不明") if ig else "不明"
 
+    sender_name = settings.gmail_from_name or settings.smtp_from_name or "鈴木"
     return f"""あなたはWeb広告代理店の敏腕営業担当者です。
 以下の企業のSNSを実際に調査した結果をもとに、具体的な改善提案を含む初回営業メールを作成してください。
+
+【送信者情報】
+送信者名: {sender_name}
+※ 本文中で「〇〇」「私」などと書く場合は必ず「{sender_name}」と記載してください。絶対に〇〇や伏字を使わないこと。
 
 【宛先企業情報】
 - 会社名: {lead.company_name}
@@ -156,8 +161,13 @@ def _build_prompt_basic(lead: Lead, service: ServiceType) -> str:
         ads_parts.append("インフルエンサー活用経験あり")
     ads_status = "・".join(ads_parts) if ads_parts else "デジタル広告未運用"
 
+    sender_name = settings.gmail_from_name or settings.smtp_from_name or "鈴木"
     return f"""あなたはWeb広告代理店の営業担当者です。
 以下の見込み顧客に対して初回営業メールを作成してください。
+
+【送信者情報】
+送信者名: {sender_name}
+※ 本文中で「〇〇」「私」などと書く場合は必ず「{sender_name}」と記載してください。絶対に〇〇や伏字を使わないこと。
 
 【企業情報】
 - 会社名: {lead.company_name}
