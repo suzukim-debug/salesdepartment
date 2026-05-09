@@ -1,9 +1,10 @@
 """
 Googleマップから企業リストを自動収集してLeadとして登録する
-Playwright async API使用（playwright install chromium）
+Playwright async Locator API使用
 """
 import logging
 import asyncio
+import traceback
 import re
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -20,106 +21,114 @@ async def scrape_google_maps(
     max_results: int = 30,
 ) -> list[dict]:
     """
-    Googleマップで「{area} {keyword}」を検索して企業情報を収集する（async版）
+    Googleマップで「{area} {keyword}」を検索して企業情報を収集する
     """
     from playwright.async_api import async_playwright
 
     query = f"{area} {keyword}"
     results = []
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        ctx = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            locale="ja-JP",
-        )
-        page = await ctx.new_page()
-
-        try:
-            search_url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
-            await page.goto(search_url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                locale="ja-JP",
+            )
 
             try:
-                await page.wait_for_selector('[role="feed"]', timeout=10000)
-            except Exception:
-                logger.warning("検索結果ペインが見つかりません")
-                return results
+                search_url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
+                logger.info(f"Navigating to: {search_url}")
+                await page.goto(search_url, timeout=30000)
+                await asyncio.sleep(3)
 
-            # スクロールして結果を読み込む
-            prev_count = 0
-            scroll_attempts = 0
-            while scroll_attempts < 10:
-                items = await page.query_selector_all('[role="feed"] > div > div[jsaction]')
-                if len(items) >= max_results:
-                    break
-                if len(items) == prev_count:
-                    scroll_attempts += 1
-                else:
-                    scroll_attempts = 0
-                prev_count = len(items)
-                feed = await page.query_selector('[role="feed"]')
-                if feed:
-                    await feed.evaluate("el => el.scrollBy(0, 800)")
-                await asyncio.sleep(1.5)
-
-            items = await page.query_selector_all('[role="feed"] > div > div[jsaction]')
-            logger.info(f"Found {len(items)} items for '{query}'")
-
-            for item in items[:max_results]:
+                # フィードが表示されるまで待つ
                 try:
-                    name_el = await item.query_selector('[class*="fontHeadlineSmall"]')
-                    if not name_el:
-                        name_el = await item.query_selector('div[aria-label]')
-                    company_name = (await name_el.inner_text()).strip() if name_el else None
-                    if not company_name:
+                    await page.locator('[role="feed"]').wait_for(timeout=12000)
+                except Exception:
+                    logger.warning("検索結果ペインが見つかりません（Google Mapsの構造が変わった可能性あり）")
+                    return results
+
+                # スクロールして結果を増やす
+                feed = page.locator('[role="feed"]')
+                for _ in range(6):
+                    count = await page.locator('[role="feed"] > div > div[jsaction]').count()
+                    logger.info(f"現在の件数: {count}")
+                    if count >= max_results:
+                        break
+                    await feed.evaluate("el => el.scrollBy(0, 800)")
+                    await asyncio.sleep(1.5)
+
+                # 全アイテムをリストで取得
+                items = await page.locator('[role="feed"] > div > div[jsaction]').all()
+                total = len(items)
+                logger.info(f"合計 {total} 件取得 / '{query}'")
+
+                for i, item in enumerate(items[:max_results]):
+                    try:
+                        # 企業名取得
+                        name_loc = item.locator('[class*="fontHeadlineSmall"]').first
+                        try:
+                            company_name = (await name_loc.text_content(timeout=3000) or "").strip()
+                        except Exception:
+                            company_name = ""
+
+                        if not company_name:
+                            continue
+
+                        # クリックして詳細を開く
+                        await item.click()
+                        await asyncio.sleep(2)
+
+                        address = phone = website = None
+                        maps_url = page.url
+
+                        # 住所
+                        try:
+                            addr = page.locator('button[data-item-id="address"] .fontBodyMedium').first
+                            address = (await addr.text_content(timeout=3000) or "").strip() or None
+                        except Exception:
+                            pass
+
+                        # 電話番号
+                        try:
+                            tel = page.locator('[data-item-id^="phone:tel"] .fontBodyMedium').first
+                            phone = (await tel.text_content(timeout=3000) or "").strip() or None
+                        except Exception:
+                            pass
+
+                        # ウェブサイト
+                        try:
+                            web = page.locator('a[data-item-id="authority"]').first
+                            website = await web.get_attribute("href", timeout=3000)
+                        except Exception:
+                            pass
+
+                        results.append({
+                            "company_name": company_name,
+                            "address": address,
+                            "company_phone": phone,
+                            "website": website,
+                            "maps_url": maps_url,
+                            "industry": industry,
+                            "area": area,
+                        })
+                        logger.info(f"[{i+1}] 収集: {company_name} / {address}")
+
+                    except Exception as e:
+                        logger.warning(f"item[{i}] error: {e}")
                         continue
 
-                    await item.click()
-                    await asyncio.sleep(2)
+            finally:
+                await browser.close()
 
-                    maps_url = page.url
-                    address = phone = website = None
-
-                    addr_el = await page.query_selector('button[data-item-id="address"] .fontBodyMedium')
-                    if not addr_el:
-                        addr_el = await page.query_selector('[data-item-id="address"]')
-                    if addr_el:
-                        address = (await addr_el.inner_text()).strip()
-
-                    phone_el = await page.query_selector('button[data-item-id^="phone"] .fontBodyMedium')
-                    if not phone_el:
-                        phone_el = await page.query_selector('[data-item-id^="phone:tel"]')
-                    if phone_el:
-                        phone = (await phone_el.inner_text()).strip()
-
-                    web_el = await page.query_selector('a[data-item-id="authority"]')
-                    if web_el:
-                        website = await web_el.get_attribute("href")
-
-                    results.append({
-                        "company_name": company_name,
-                        "address": address,
-                        "company_phone": phone,
-                        "website": website,
-                        "maps_url": maps_url,
-                        "industry": industry,
-                        "area": area,
-                    })
-                    logger.info(f"収集: {company_name} / {address} / {website}")
-
-                except Exception as e:
-                    logger.warning(f"item parse error: {e}")
-                    continue
-
-        except Exception as e:
-            logger.error(f"maps scrape failed: {e}")
-        finally:
-            await browser.close()
+    except Exception as e:
+        logger.error(f"maps scrape failed: {e}\n{traceback.format_exc()}")
+        raise
 
     return results
 
@@ -129,9 +138,7 @@ def import_maps_results(
     results: list[dict],
     source_keyword: str,
 ) -> dict:
-    """
-    Googleマップ収集結果をLeadとしてDBに保存する（重複スキップ）
-    """
+    """Googleマップ収集結果をLeadとしてDBに保存（重複スキップ）"""
     created = 0
     skipped = 0
 
