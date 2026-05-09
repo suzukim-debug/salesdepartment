@@ -15,6 +15,8 @@ import logging
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
+import threading
+_scraper_lock = threading.Lock()
 from datetime import datetime
 from typing import Optional
 
@@ -130,17 +132,23 @@ async def run_scraper(
     do_diagnosis = run_sns_diagnosis == "1"
 
     def _run():
-        from database.db import SessionLocal
-        from scraper.orchestrator import run_batch_scrape
-        session = SessionLocal()
+        if not _scraper_lock.acquire(blocking=False):
+            logger.info("スクレイピング既に実行中のためスキップ")
+            return
         try:
-            run_batch_scrape(
-                session, limit=limit,
-                run_sns_deep=do_sns_deep,
-                run_sns_diagnosis=do_diagnosis,
-            )
+            from database.db import SessionLocal
+            from scraper.orchestrator import run_batch_scrape
+            session = SessionLocal()
+            try:
+                run_batch_scrape(
+                    session, limit=limit,
+                    run_sns_deep=do_sns_deep,
+                    run_sns_diagnosis=do_diagnosis,
+                )
+            finally:
+                session.close()
         finally:
-            session.close()
+            _scraper_lock.release()
 
     # 実際に処理できるリード数を事前確認
     candidate_count = db.query(func.count(Lead.id)).filter(
@@ -151,6 +159,9 @@ async def run_scraper(
         Lead.scrape_status == ScrapeStatus.PENDING,
         Lead.website.is_(None),
     ).scalar()
+
+    if _scraper_lock.locked():
+        return JSONResponse({"message": "⚠️ 既にスクレイピングが実行中です。完了をお待ちください。"})
 
     if candidate_count == 0:
         msg = f"⚠️ 対象リードが0件です。URLが登録されているリードがありません（URLなし: {no_url_count}件）"
