@@ -55,9 +55,13 @@ COLUMN_MAP = {
     "uses_influencer": "uses_influencer",
     "メモ": "memo",
     "memo": "memo",
+    "除外": "_exclude",
+    "取引中": "_exclude",
+    "既存取引先": "_exclude",
+    "exclude": "_exclude",
 }
 
-BOOL_TRUE_VALUES = {"yes", "true", "1", "あり", "○", "◯", "有"}
+BOOL_TRUE_VALUES = {"yes", "true", "1", "あり", "○", "◯", "有", "✓", "✔"}
 
 
 def _parse_bool(val) -> bool:
@@ -94,15 +98,21 @@ def import_from_csv(
         try:
             lead_data = {"source": source, "status": LeadStatus.NEW}
 
+            is_excluded = False
             for col, val in row.items():
                 field = COLUMN_MAP.get(col)
                 if not field or pd.isna(val):
                     continue
 
-                if field.startswith("has_") or field.startswith("runs_") or field == "uses_influencer":
+                if field == "_exclude":
+                    is_excluded = _parse_bool(val)
+                elif field.startswith("has_") or field.startswith("runs_") or field == "uses_influencer":
                     lead_data[field] = _parse_bool(val)
                 else:
                     lead_data[field] = str(val).strip()
+
+            if is_excluded:
+                lead_data["status"] = LeadStatus.EXCLUDED
 
             company_name = lead_data.get("company_name")
             if not company_name:
@@ -139,6 +149,6 @@ def get_csv_template() -> str:
         "会社名", "業種", "都道府県", "住所", "従業員数", "年商",
         "URL", "担当者名", "役職", "メールアドレス", "電話番号", "担当者電話",
         "Instagram", "Twitter", "TikTok", "YouTube", "LINE公式",
-        "投稿頻度", "Web広告", "動画広告", "インフルエンサー活用", "メモ"
+        "投稿頻度", "Web広告", "動画広告", "インフルエンサー活用", "メモ", "除外"
     ]
     return ",".join(headers) + "\n"

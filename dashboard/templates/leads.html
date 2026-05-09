@@ -3,7 +3,35 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h4 class="mb-0"><i class="bi bi-people"></i> リード管理 <small class="text-muted fs-6">{{ total_count }}件</small></h4>
+  <div class="d-flex gap-2">
+    <label class="btn btn-sm btn-outline-secondary" title="営業リストCSVをインポート">
+      <i class="bi bi-upload"></i> リストをインポート
+      <input type="file" accept=".csv" style="display:none" onchange="importCSV(this, '/leads/import', 'リード')">
+    </label>
+    <label class="btn btn-sm btn-outline-danger" title="既存取引先・除外リストをインポート">
+      <i class="bi bi-slash-circle"></i> 除外リストをインポート
+      <input type="file" accept=".csv" style="display:none" onchange="importCSV(this, '/leads/import-exclude', '除外')">
+    </label>
+    <a href="/leads/export/template" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-download"></i> テンプレDL
+    </a>
+  </div>
 </div>
+<script>
+async function importCSV(input, url, label) {
+  if (!input.files[0]) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  const res = await fetch(url, {method:'POST', body: fd});
+  const data = await res.json();
+  if (url.includes('exclude')) {
+    alert(`除外リスト登録完了\n既存リードに除外フラグ: ${data.marked_excluded}件\n新規除外登録: ${data.created_excluded}件`);
+  } else {
+    alert(`${label}インポート完了\n登録: ${data.imported}件 / スキップ: ${data.skipped}件`);
+  }
+  location.reload();
+}
+</script>
 
 <div class="card border-0 shadow-sm mb-3">
   <div class="card-body py-2">

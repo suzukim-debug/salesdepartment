@@ -294,6 +294,46 @@ async def import_leads(file: UploadFile = File(...), db: Session = Depends(get_d
     return JSONResponse(result)
 
 
+@app.post("/leads/import-exclude")
+async def import_exclude_list(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """既存取引先リストをインポートして除外フラグを立てる"""
+    import io as _io
+    content = await file.read()
+    try:
+        import pandas as pd
+        df = pd.read_csv(_io.BytesIO(content), encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        df = pd.read_csv(_io.BytesIO(content), encoding="shift-jis")
+
+    df.columns = [c.strip() for c in df.columns]
+    marked = 0
+    created = 0
+
+    for _, row in df.iterrows():
+        name_col = next((c for c in df.columns if c in ("会社名", "company_name")), None)
+        if not name_col:
+            break
+        company_name = str(row.get(name_col, "")).strip()
+        if not company_name:
+            continue
+
+        existing = db.query(Lead).filter(Lead.company_name == company_name).first()
+        if existing:
+            existing.status = LeadStatus.EXCLUDED
+            marked += 1
+        else:
+            lead = Lead(
+                company_name=company_name,
+                status=LeadStatus.EXCLUDED,
+                source="exclude_list",
+            )
+            db.add(lead)
+            created += 1
+
+    db.commit()
+    return JSONResponse({"marked_excluded": marked, "created_excluded": created})
+
+
 @app.get("/leads/export/template")
 async def download_template():
     return Response(
@@ -311,6 +351,7 @@ async def outreach_page(request: Request, db: Session = Depends(get_db)):
         db.query(Lead)
         .filter(
             Lead.status.in_([LeadStatus.NEW, LeadStatus.RESEARCHED]),
+            Lead.status != LeadStatus.EXCLUDED,
             Lead.lead_score >= 40,
             Lead.contact_email.isnot(None),
         )

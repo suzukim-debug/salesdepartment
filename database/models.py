@@ -26,6 +26,7 @@ class LeadStatus(str, PyEnum):
     MEETING_SET = "meeting_set"    # アポ獲得
     REJECTED = "rejected"          # お断り
     UNSUBSCRIBED = "unsubscribed"  # 配信停止
+    EXCLUDED = "excluded"          # 除外（既存取引先等）
 
 
 class ServiceType(str, PyEnum):
