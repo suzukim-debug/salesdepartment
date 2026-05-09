@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}リード自動収集{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0"><i class="bi bi-map"></i> Googleマップからリード自動収集</h4>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-5">
+    <div class="card shadow-sm">
+      <div class="card-header fw-bold"><i class="bi bi-search"></i> 収集条件</div>
+      <div class="card-body">
+        <form id="discoverForm">
+          <div class="mb-3">
+            <label class="form-label fw-bold">業種・キーワード</label>
+            <input type="text" class="form-control" id="keyword" placeholder="例: ペットショップ、美容院、飲食店" value="{{ keyword or '' }}" required>
+            <div class="form-text">Googleマップで検索するキーワード</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-bold">エリア</label>
+            <input type="text" class="form-control" id="area" placeholder="例: 銀座、渋谷、大阪梅田" value="{{ area or '' }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-bold">業種（分類用）</label>
+            <input type="text" class="form-control" id="industry" placeholder="例: ペット関連、美容、飲食" value="{{ industry or '' }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-bold">収集件数（最大）</label>
+            <select class="form-select" id="maxResults">
+              <option value="10">10件</option>
+              <option value="20" selected>20件</option>
+              <option value="30">30件</option>
+            </select>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-primary btn-lg" id="startBtn">
+              <i class="bi bi-play-circle"></i> 収集開始
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mt-3" id="progressCard" style="display:none!important;">
+      <div class="card-body text-center py-4">
+        <div class="spinner-border text-primary mb-3" role="status"></div>
+        <div class="fw-bold" id="progressText">Googleマップを検索中...</div>
+        <div class="text-muted small mt-1">数分かかる場合があります。このままお待ちください。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-7">
+    <div class="card shadow-sm">
+      <div class="card-header fw-bold"><i class="bi bi-list-ul"></i> 収集結果</div>
+      <div class="card-body" id="resultArea">
+        {% if result %}
+          {% if result.error %}
+          <div class="alert alert-danger">{{ result.error }}</div>
+          {% else %}
+          <div class="alert alert-success">
+            <strong>{{ result.created }}件</strong>を新規登録しました（重複スキップ: {{ result.skipped }}件）
+          </div>
+          <div class="d-grid mt-2">
+            <a href="/leads?source=googlemap" class="btn btn-outline-primary">
+              <i class="bi bi-people"></i> リード一覧で確認する
+            </a>
+          </div>
+          {% endif %}
+        {% else %}
+        <div class="text-center text-muted py-5">
+          <i class="bi bi-map" style="font-size:3rem;opacity:.3;"></i>
+          <p class="mt-3">左のフォームで条件を入力して収集を開始してください</p>
+          <p class="small">収集後、SNS分析→スコアリングまで自動で行います</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card shadow-sm mt-3">
+      <div class="card-header fw-bold"><i class="bi bi-info-circle"></i> 使い方</div>
+      <div class="card-body small text-muted">
+        <ol class="mb-0">
+          <li>キーワード・エリアを入力して「収集開始」を押す</li>
+          <li>Googleマップから企業名・住所・電話・サイトを自動取得</li>
+          <li>リード一覧に自動登録される</li>
+          <li>「①スクレイピング」でSNS分析＆スコアリングを実行</li>
+          <li>スコアが高い順に絞り込んでメール送信</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('discoverForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const btn = document.getElementById('startBtn');
+  const progressCard = document.getElementById('progressCard');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>収集中...';
+  progressCard.style.display = '';
+
+  const body = new FormData();
+  body.append('keyword', document.getElementById('keyword').value);
+  body.append('area', document.getElementById('area').value);
+  body.append('industry', document.getElementById('industry').value);
+  body.append('max_results', document.getElementById('maxResults').value);
+
+  try {
+    const res = await fetch('/discover/run', { method: 'POST', body });
+    const data = await res.json();
+    const area = document.getElementById('resultArea');
+    if (data.error) {
+      area.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+    } else {
+      area.innerHTML = `
+        <div class="alert alert-success">
+          <strong>${data.created}件</strong>を新規登録しました（重複スキップ: ${data.skipped}件）
+        </div>
+        <div class="d-grid mt-2">
+          <a href="/leads" class="btn btn-outline-primary"><i class="bi bi-people"></i> リード一覧で確認する</a>
+        </div>`;
+    }
+  } catch(err) {
+    document.getElementById('resultArea').innerHTML = `<div class="alert alert-danger">通信エラー: ${err}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-play-circle"></i> 収集開始';
+    progressCard.style.display = 'none';
+  }
+});
+</script>
+{% endblock %}

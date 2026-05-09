@@ -11,7 +11,10 @@ FastAPI ダッシュボード (全8ステップ対応版)
 """
 import json
 import io
+import logging
 from contextlib import asynccontextmanager
+
+logger = logging.getLogger(__name__)
 from datetime import datetime
 from typing import Optional
 
@@ -637,6 +640,39 @@ async def run_scheduler_job(job_id: str, background_tasks: BackgroundTasks, db: 
 
     background_tasks.add_task(_run)
     return JSONResponse({"message": f"{job_id} を手動実行しました"})
+
+
+# ─── リード自動収集（Googleマップ） ──────────────────────────
+
+@app.get("/discover", response_class=HTMLResponse)
+async def discover_page(request: Request):
+    return templates.TemplateResponse("discover.html", {"request": request})
+
+
+@app.post("/discover/run")
+async def discover_run(
+    background_tasks: BackgroundTasks,
+    keyword: str = Form(...),
+    area: str = Form(...),
+    industry: str = Form(""),
+    max_results: int = Form(20),
+    db: Session = Depends(get_db),
+):
+    from scraper.maps_scraper import scrape_google_maps, import_maps_results
+    try:
+        results = scrape_google_maps(
+            keyword=keyword,
+            area=area,
+            industry=industry or keyword,
+            max_results=max_results,
+        )
+        if not results:
+            return JSONResponse({"error": "企業が見つかりませんでした。キーワードやエリアを変えてお試しください。", "created": 0, "skipped": 0})
+        stats = import_maps_results(db, results, source_keyword=f"{area} {keyword}")
+        return JSONResponse(stats)
+    except Exception as e:
+        logger.error(f"discover error: {e}")
+        return JSONResponse({"error": str(e), "created": 0, "skipped": 0})
 
 
 # ─── API ────────────────────────────────────────────────────

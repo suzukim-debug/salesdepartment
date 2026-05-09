@@ -46,6 +46,9 @@
   </a>
 
   <div class="section-label">リスト収集・分析</div>
+  <a href="/discover" class="{% if '/discover' in request.url.path %}active{% endif %}">
+    <i class="bi bi-map"></i> <span>マップ自動収集</span>
+  </a>
   <a href="/scraper" class="{% if '/scraper' in request.url.path %}active{% endif %}">
     <i class="bi bi-search"></i> <span>①スクレイピング</span>
   </a>
