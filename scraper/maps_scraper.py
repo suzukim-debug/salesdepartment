@@ -1,6 +1,7 @@
 """
-NTTタウンページ（itp.ne.jp）から企業リストを自動収集してLeadとして登録する
-Playwright不要 - httpx + BeautifulSoup のみ使用
+日本のローカルビジネスディレクトリから企業リストを自動収集してLeadとして登録する
+httpx + BeautifulSoup のみ使用（Playwright不要）
+対応サイト: ekiten.jp → itp.ne.jp → フォールバック
 """
 import logging
 import asyncio
@@ -26,13 +27,96 @@ HEADERS = {
 }
 
 
+def _scrape_ekiten(keyword: str, area: str, industry: str, max_results: int) -> list[dict]:
+    """ekiten.jp（エキテン）から企業情報を収集する"""
+    results = []
+
+    with httpx.Client(headers=HEADERS, timeout=20, follow_redirects=True) as client:
+        page = 1
+        while len(results) < max_results:
+            try:
+                url = "https://www.ekiten.jp/search/"
+                params = {"q": keyword, "area_name": area, "page": str(page)}
+                resp = client.get(url, params=params)
+                resp.raise_for_status()
+            except Exception as e:
+                logger.error(f"ekiten fetch error p{page}: {e}")
+                break
+
+            soup = BeautifulSoup(resp.text, "lxml")
+            title = soup.find("title")
+            logger.info(f"ekiten page{page} title: {title.get_text(strip=True) if title else 'N/A'}")
+
+            # エキテンの店舗リスト
+            items = (
+                soup.select(".p-shop-list__item")
+                or soup.select(".shop-list-item")
+                or soup.select("li[class*='shop']")
+                or soup.select("article[class*='shop']")
+                or soup.select(".c-card")
+            )
+
+            logger.info(f"ekiten items found: {len(items)}")
+
+            if not items:
+                # ページ構造が変わっている場合の汎用セレクタ
+                items = soup.select("h2 a, h3 a")
+                for link in items[:max_results]:
+                    name = link.get_text(strip=True)
+                    if name and 3 < len(name) < 50:
+                        results.append({
+                            "company_name": name,
+                            "address": None,
+                            "company_phone": None,
+                            "website": None,
+                            "industry": industry,
+                            "area": area,
+                        })
+                break
+
+            for item in items:
+                name_el = (
+                    item.select_one("h2 a, h3 a, h4 a")
+                    or item.select_one("[class*='name'] a, [class*='Name'] a")
+                    or item.select_one("a[href*='/shop/']")
+                )
+                company_name = (name_el.get_text(strip=True) if name_el else "").strip()
+                if not company_name or len(company_name) < 2:
+                    continue
+
+                addr_el = item.select_one("[class*='address'], [class*='addr'], [class*='Address']")
+                address = addr_el.get_text(strip=True) if addr_el else None
+
+                # 電話番号をテキストから抽出
+                text = item.get_text()
+                tel_match = re.search(r'0\d[\d\-]{8,11}', text)
+                phone = tel_match.group(0) if tel_match else None
+
+                results.append({
+                    "company_name": company_name,
+                    "address": address,
+                    "company_phone": phone,
+                    "website": None,
+                    "industry": industry,
+                    "area": area,
+                })
+                logger.info(f"ekiten収集: {company_name} / {address}")
+
+            if len(items) < 5:
+                break
+            page += 1
+            time.sleep(1.0)
+
+    return results[:max_results]
+
+
 def _scrape_itp(keyword: str, area: str, industry: str, max_results: int) -> list[dict]:
-    """itp.ne.jp（NTTタウンページ）から企業情報を収集する"""
+    """itp.ne.jp（NTTタウンページ）から企業情報を収集するフォールバック"""
     results = []
     query = f"{area} {keyword}"
     start = 1
 
-    with httpx.Client(headers=HEADERS, timeout=15, follow_redirects=True) as client:
+    with httpx.Client(headers=HEADERS, timeout=20, follow_redirects=True) as client:
         while len(results) < max_results:
             try:
                 resp = client.get(
@@ -41,117 +125,54 @@ def _scrape_itp(keyword: str, area: str, industry: str, max_results: int) -> lis
                 )
                 resp.raise_for_status()
             except Exception as e:
-                logger.error(f"itp.ne.jp fetch error: {e}")
+                logger.error(f"itp fetch error: {e}")
                 break
 
             soup = BeautifulSoup(resp.text, "lxml")
+            title = soup.find("title")
+            logger.info(f"itp title: {title.get_text(strip=True) if title else 'N/A'}, bytes={len(resp.text)}")
 
-            # 企業リストを抽出（複数セレクタ対応）
             items = (
                 soup.select(".shopDataBox")
                 or soup.select(".p-shopItem")
                 or soup.select("article.shop")
                 or soup.select("[class*='shopItem']")
-                or soup.select("[class*='Shop']")
             )
-
+            logger.info(f"itp items found: {len(items)}")
             if not items:
-                logger.warning(f"itp.ne.jp: セレクタが合いません。page={start}")
-                # デバッグ: ページタイトルを確認
-                title = soup.find("title")
-                logger.info(f"Page title: {title.get_text() if title else 'N/A'}")
                 break
 
             for item in items:
-                # 企業名
                 name_el = (
-                    item.select_one("h3")
-                    or item.select_one("h2")
+                    item.select_one("h3 a, h2 a")
                     or item.select_one("[class*='shopName']")
                     or item.select_one("[class*='Name']")
-                    or item.select_one("a[href*='/detail/']")
                 )
-                company_name = name_el.get_text(strip=True) if name_el else ""
+                company_name = (name_el.get_text(strip=True) if name_el else "").strip()
                 if not company_name:
                     continue
 
-                # 住所
-                addr_el = (
-                    item.select_one("[class*='address']")
-                    or item.select_one("[class*='Address']")
-                    or item.select_one("[class*='addr']")
-                )
+                addr_el = item.select_one("[class*='address'], [class*='addr']")
                 address = addr_el.get_text(strip=True) if addr_el else None
 
-                # 電話番号
-                tel_el = (
-                    item.select_one("[class*='tel']")
-                    or item.select_one("[class*='Tel']")
-                    or item.select_one("[class*='phone']")
-                )
-                phone = tel_el.get_text(strip=True) if tel_el else None
-                if not phone:
-                    # テキストから電話番号パターンを探す
-                    m = re.search(r'0\d[\d\-]{8,11}', item.get_text())
-                    phone = m.group(0) if m else None
-
-                # ウェブサイト
-                web_el = item.select_one("a[href^='http']:not([href*='itp.ne.jp'])")
-                website = web_el["href"] if web_el else None
+                text = item.get_text()
+                tel_match = re.search(r'0\d[\d\-]{8,11}', text)
+                phone = tel_match.group(0) if tel_match else None
 
                 results.append({
                     "company_name": company_name,
                     "address": address,
                     "company_phone": phone,
-                    "website": website,
+                    "website": None,
                     "industry": industry,
                     "area": area,
                 })
-                logger.info(f"収集: {company_name} / {address} / {phone}")
+                logger.info(f"itp収集: {company_name}")
 
             if len(items) < 10:
-                break  # 最終ページ
+                break
             start += 10
             time.sleep(1.0)
-
-    return results[:max_results]
-
-
-def _scrape_google_search(keyword: str, area: str, industry: str, max_results: int) -> list[dict]:
-    """Google検索結果から店舗情報を収集するフォールバック"""
-    results = []
-    query = f"{area} {keyword} 店舗一覧"
-
-    with httpx.Client(headers=HEADERS, timeout=15, follow_redirects=True) as client:
-        for page in range(0, min(3, max_results // 5 + 1)):
-            try:
-                resp = client.get(
-                    "https://www.google.com/search",
-                    params={"q": query, "start": str(page * 10), "hl": "ja"},
-                )
-                soup = BeautifulSoup(resp.text, "lxml")
-
-                # ローカルパック（Googleマップ掲載情報）
-                local_results = soup.select("div[data-local-attribute], .rllt__details, .VkpGBb")
-                for item in local_results:
-                    name_el = item.select_one("[role='heading'], h3, .dbg0pd")
-                    if name_el:
-                        addr_el = item.select_one(".rllt__details div:nth-child(2), .LrzXr")
-                        results.append({
-                            "company_name": name_el.get_text(strip=True),
-                            "address": addr_el.get_text(strip=True) if addr_el else None,
-                            "company_phone": None,
-                            "website": None,
-                            "industry": industry,
-                            "area": area,
-                        })
-
-                if len(results) >= max_results:
-                    break
-                time.sleep(2.0)
-            except Exception as e:
-                logger.error(f"Google search error: {e}")
-                break
 
     return results[:max_results]
 
@@ -162,22 +183,23 @@ async def scrape_google_maps(
     industry: str,
     max_results: int = 30,
 ) -> list[dict]:
-    """企業リストを収集する（itp.ne.jp → Googleフォールバック）"""
+    """企業リストを収集する（ekiten.jp → itp.ne.jp の順で試行）"""
     loop = asyncio.get_event_loop()
 
-    # itp.ne.jp で収集
+    # まずエキテン
     results = await loop.run_in_executor(
         None,
-        lambda: _scrape_itp(keyword, area, industry, max_results),
+        lambda: _scrape_ekiten(keyword, area, industry, max_results),
     )
+    logger.info(f"ekiten結果: {len(results)}件")
 
-    # itp.ne.jp で0件だったらGoogleで補完
+    # エキテンで取れなければitp
     if not results:
-        logger.info("itp.ne.jpで0件 → Google検索フォールバック")
         results = await loop.run_in_executor(
             None,
-            lambda: _scrape_google_search(keyword, area, industry, max_results),
+            lambda: _scrape_itp(keyword, area, industry, max_results),
         )
+        logger.info(f"itp結果: {len(results)}件")
 
     return results
 
