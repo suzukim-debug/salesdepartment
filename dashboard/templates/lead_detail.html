@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}{{ lead.company_name }} - 詳細{% endblock %}
+{% block content %}
+<div class="mb-3">
+  <a href="/leads" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i> 一覧に戻る</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <!-- 基本情報 -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3 d-flex justify-content-between">
+        <h5 class="mb-0">{{ lead.company_name }}</h5>
+        <span class="score-badge {% if lead.lead_score >= 70 %}score-high{% elif lead.lead_score >= 40 %}score-mid{% else %}score-low{% endif %} fs-6">
+          スコア: {{ lead.lead_score }}
+        </span>
+      </div>
+      <div class="card-body">
+        <div class="row g-2" style="font-size:13px;">
+          <div class="col-md-6"><strong>業種:</strong> {{ lead.industry or "-" }}</div>
+          <div class="col-md-6"><strong>従業員数:</strong> {{ lead.employee_count or "-" }}</div>
+          <div class="col-md-6"><strong>年商:</strong> {{ lead.annual_revenue or "-" }}</div>
+          <div class="col-md-6"><strong>所在地:</strong> {{ lead.prefecture or "" }} {{ lead.address or "" }}</div>
+          <div class="col-md-6"><strong>URL:</strong>
+            {% if lead.website %}<a href="{{ lead.website }}" target="_blank">{{ lead.website }}</a>{% else %}-{% endif %}
+          </div>
+        </div>
+        <hr>
+        <div class="row g-2" style="font-size:13px;">
+          <div class="col-md-6"><strong>担当者:</strong> {{ lead.contact_name or "-" }} {{ lead.contact_title or "" }}</div>
+          <div class="col-md-6"><strong>メール:</strong> {{ lead.contact_email or "-" }}</div>
+          <div class="col-md-6"><strong>担当者TEL:</strong> {{ lead.contact_phone or "-" }}</div>
+          <div class="col-md-6"><strong>代表TEL:</strong> {{ lead.company_phone or "-" }}</div>
+        </div>
+        <hr>
+        <div style="font-size:13px;">
+          <strong>SNS:</strong>
+          {% if lead.has_instagram %}<span class="badge bg-danger me-1">Instagram</span>{% endif %}
+          {% if lead.has_twitter %}<span class="badge bg-info me-1">X(Twitter)</span>{% endif %}
+          {% if lead.has_tiktok %}<span class="badge bg-dark me-1">TikTok</span>{% endif %}
+          {% if lead.has_youtube %}<span class="badge bg-danger me-1">YouTube</span>{% endif %}
+          {% if lead.has_line_official %}<span class="badge bg-success me-1">LINE公式</span>{% endif %}
+          {% if not (lead.has_instagram or lead.has_twitter or lead.has_tiktok or lead.has_youtube or lead.has_line_official) %}
+          <span class="text-muted">SNS未活用</span>
+          {% endif %}
+          &nbsp;&nbsp;<strong>投稿頻度:</strong> {{ lead.sns_post_frequency or "-" }}
+        </div>
+        <div class="mt-1" style="font-size:13px;">
+          {% if lead.runs_web_ads %}<span class="badge bg-primary me-1">Web広告運用中</span>{% endif %}
+          {% if lead.runs_video_ads %}<span class="badge bg-warning text-dark me-1">動画広告あり</span>{% endif %}
+          {% if lead.uses_influencer %}<span class="badge bg-success me-1">インフルエンサー活用</span>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- 架電ログ -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-telephone"></i> 架電ログ</h6>
+      </div>
+      <div class="card-body p-0">
+        {% if lead.call_logs %}
+        <table class="table table-sm mb-0" style="font-size:12px;">
+          <thead class="table-light"><tr><th>日時</th><th>担当者</th><th>結果</th><th>次回アクション</th><th>メモ</th></tr></thead>
+          <tbody>
+          {% for cl in lead.call_logs | sort(attribute='called_at', reverse=True) %}
+          <tr>
+            <td>{{ cl.called_at.strftime('%m/%d %H:%M') if cl.called_at else '-' }}</td>
+            <td>{{ cl.caller_name }}</td>
+            <td><span class="badge {% if cl.result == 'アポ獲得' %}bg-success{% elif cl.result == 'お断り' %}bg-danger{% else %}bg-secondary{% endif %}">{{ cl.result }}</span></td>
+            <td>{{ cl.next_action or '-' }}<br>{% if cl.next_action_date %}<small class="text-muted">{{ cl.next_action_date.strftime('%m/%d %H:%M') }}</small>{% endif %}</td>
+            <td>{{ cl.notes or '-' }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-center text-muted py-3" style="font-size:13px;">架電履歴はありません</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- メール送信履歴 -->
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-envelope"></i> メール送信履歴</h6>
+      </div>
+      <div class="card-body p-0">
+        {% if lead.outreach_logs %}
+        <table class="table table-sm mb-0" style="font-size:12px;">
+          <thead class="table-light"><tr><th>送信日時</th><th>件名</th><th>開封</th><th>クリック</th><th>反響</th></tr></thead>
+          <tbody>
+          {% for ol in lead.outreach_logs | sort(attribute='sent_at', reverse=True) %}
+          <tr>
+            <td>{{ ol.sent_at.strftime('%m/%d %H:%M') if ol.sent_at else '未送信' }}</td>
+            <td>{{ ol.subject }}</td>
+            <td>{{ "✓" if ol.opened_at else "-" }}</td>
+            <td>{{ "✓" if ol.clicked_at else "-" }}</td>
+            <td>{{ "✓" if ol.responded_at else "-" }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-center text-muted py-3" style="font-size:13px;">送信履歴はありません</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <!-- ステータス更新 -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">ステータス更新</h6>
+      </div>
+      <div class="card-body">
+        <form method="post" action="/leads/{{ lead.id }}/status">
+          <div class="mb-2">
+            <select name="status" class="form-select form-select-sm">
+              {% for s in statuses %}
+              <option value="{{ s }}" {% if lead.status.value == s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-2">
+            <textarea name="memo" class="form-control form-control-sm" rows="3" placeholder="メモ">{{ lead.memo or '' }}</textarea>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm w-100">更新</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- 架電記録 -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-telephone-plus"></i> 架電記録</h6>
+      </div>
+      <div class="card-body">
+        <form id="callForm">
+          <input type="hidden" name="lead_id" value="{{ lead.id }}">
+          <div class="mb-2">
+            <input type="text" name="caller_name" class="form-control form-control-sm" placeholder="架電担当者名" required>
+          </div>
+          <div class="mb-2">
+            <select name="result" class="form-select form-select-sm" required>
+              <option value="">結果を選択</option>
+              <option>繋がらず</option>
+              <option>折り返し</option>
+              <option>繋がった</option>
+              <option>再架電</option>
+              <option>アポ獲得</option>
+              <option>お断り</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <input type="text" name="next_action" class="form-control form-control-sm" placeholder="次回アクション">
+          </div>
+          <div class="mb-2">
+            <input type="datetime-local" name="next_action_date" class="form-control form-control-sm">
+          </div>
+          <div class="mb-2">
+            <textarea name="notes" class="form-control form-control-sm" rows="2" placeholder="メモ"></textarea>
+          </div>
+          <button type="submit" class="btn btn-success btn-sm w-100">記録する</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- AI メール生成 -->
+    {% if lead.contact_email %}
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-robot"></i> AIメール生成・送信</h6>
+      </div>
+      <div class="card-body">
+        <button class="btn btn-outline-primary btn-sm w-100 mb-2" id="generateBtn" onclick="generateEmail({{ lead.id }})">
+          <i class="bi bi-stars"></i> AIでメール生成
+        </button>
+        <div id="emailPreview" class="d-none">
+          <input type="text" id="emailSubject" class="form-control form-control-sm mb-1" placeholder="件名">
+          <textarea id="emailBody" class="form-control form-control-sm mb-2" rows="6"></textarea>
+          <button class="btn btn-primary btn-sm w-100" onclick="sendEmail({{ lead.id }})">送信する</button>
+        </div>
+        <div id="emailStatus" class="mt-1"></div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById("callForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const r = await fetch("/calls/log", {method:"POST", body:fd});
+  if (r.ok) location.reload();
+});
+
+let generatedData = {};
+async function generateEmail(leadId) {
+  const btn = document.getElementById("generateBtn");
+  btn.disabled = true; btn.textContent = "生成中...";
+  const fd = new FormData(); fd.append("lead_id", leadId);
+  const r = await fetch("/outreach/preview", {method:"POST", body:fd});
+  if (r.ok) {
+    generatedData = await r.json();
+    document.getElementById("emailSubject").value = generatedData.subject;
+    document.getElementById("emailBody").value = generatedData.body;
+    document.getElementById("emailPreview").classList.remove("d-none");
+  }
+  btn.disabled = false; btn.innerHTML = '<i class="bi bi-stars"></i> 再生成';
+}
+
+async function sendEmail(leadId) {
+  const fd = new FormData();
+  fd.append("lead_id", leadId);
+  fd.append("subject", document.getElementById("emailSubject").value);
+  fd.append("body", document.getElementById("emailBody").value);
+  fd.append("body_html", generatedData.body_html || document.getElementById("emailBody").value);
+  fd.append("service_type", generatedData.service_type || "mixed");
+  const r = await fetch("/outreach/send", {method:"POST", body:fd});
+  const d = await r.json();
+  document.getElementById("emailStatus").innerHTML = d.success
+    ? '<div class="alert alert-success py-1 mb-0 small">送信完了！</div>'
+    : '<div class="alert alert-danger py-1 mb-0 small">送信失敗</div>';
+  if (d.success) setTimeout(() => location.reload(), 1500);
+}
+</script>
+{% endblock %}

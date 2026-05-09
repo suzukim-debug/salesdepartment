@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}リード管理 - Sales System{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-people"></i> リード管理 <small class="text-muted fs-6">{{ total_count }}件</small></h4>
+</div>
+
+<div class="card border-0 shadow-sm mb-3">
+  <div class="card-body py-2">
+    <form class="row g-2" method="get">
+      <div class="col-md-3">
+        <input type="text" name="search" class="form-control form-control-sm" placeholder="会社名で検索" value="{{ search or '' }}">
+      </div>
+      <div class="col-md-2">
+        <select name="status" class="form-select form-select-sm">
+          <option value="">全ステータス</option>
+          {% for s in statuses %}
+          <option value="{{ s }}" {% if current_status == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <input type="text" name="industry" class="form-control form-control-sm" placeholder="業種で絞り込み" value="{{ current_industry or '' }}">
+      </div>
+      <div class="col-md-2">
+        <input type="number" name="min_score" class="form-control form-control-sm" placeholder="最低スコア" value="{{ min_score if min_score > 0 else '' }}" min="0" max="100">
+      </div>
+      <div class="col-md-1">
+        <button type="submit" class="btn btn-primary btn-sm w-100">検索</button>
+      </div>
+      <div class="col-md-1">
+        <a href="/leads" class="btn btn-outline-secondary btn-sm w-100">リセット</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0" style="font-size:13px;">
+      <thead class="table-light">
+        <tr>
+          <th>会社名</th><th>業種</th><th>スコア</th><th>推奨サービス</th>
+          <th>ステータス</th><th>メール</th><th>電話</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for lead in leads %}
+      <tr>
+        <td>
+          <strong>{{ lead.company_name }}</strong>
+          {% if lead.prefecture %}<br><small class="text-muted">{{ lead.prefecture }}</small>{% endif %}
+        </td>
+        <td>{{ lead.industry or "-" }}</td>
+        <td>
+          {% if lead.lead_score >= 70 %}
+          <span class="score-badge score-high">{{ lead.lead_score }}</span>
+          {% elif lead.lead_score >= 40 %}
+          <span class="score-badge score-mid">{{ lead.lead_score }}</span>
+          {% else %}
+          <span class="score-badge score-low">{{ lead.lead_score }}</span>
+          {% endif %}
+        </td>
+        <td>{{ lead.recommended_service.value if lead.recommended_service else "-" }}</td>
+        <td>
+          <span class="badge {% if lead.status.value == 'responded' %}bg-danger{% elif lead.status.value in ['clicked','opened'] %}bg-warning text-dark{% elif lead.status.value == 'meeting_set' %}bg-success{% else %}bg-secondary{% endif %}">
+            {{ lead.status.value }}
+          </span>
+        </td>
+        <td>{{ "✓" if lead.contact_email else "-" }}</td>
+        <td>{{ lead.contact_phone or lead.company_phone or "-" }}</td>
+        <td><a href="/leads/{{ lead.id }}" class="btn btn-sm btn-outline-primary">詳細</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="text-center text-muted py-4">リードが見つかりません</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if total_count > per_page %}
+<nav class="mt-3">
+  <ul class="pagination pagination-sm">
+    {% for p in range(1, (total_count // per_page) + 2) %}
+    <li class="page-item {% if p == page %}active{% endif %}">
+      <a class="page-link" href="?page={{ p }}&status={{ current_status or '' }}&search={{ search or '' }}&min_score={{ min_score }}">{{ p }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endif %}
+{% endblock %}

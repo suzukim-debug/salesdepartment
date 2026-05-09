@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}ホットリード - Sales System{% endblock %}
+{% block content %}
+<h4 class="mb-4"><i class="bi bi-fire"></i> ホットリード <span class="hot-indicator ms-2"></span></h4>
+
+{% if hot_leads %}
+<div class="row g-3">
+  {% for lead in hot_leads %}
+  <div class="col-md-6 col-lg-4">
+    <div class="card border-0 shadow-sm h-100 {% if lead.status.value == 'responded' %}border-start border-danger border-3{% endif %}">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div>
+            <h6 class="mb-0">{{ lead.company_name }}</h6>
+            <small class="text-muted">{{ lead.industry }}</small>
+          </div>
+          <span class="score-badge {% if lead.lead_score >= 70 %}score-high{% elif lead.lead_score >= 40 %}score-mid{% else %}score-low{% endif %}">
+            {{ lead.lead_score }}
+          </span>
+        </div>
+
+        <div class="mb-2" style="font-size:12px;">
+          <span class="badge {% if lead.status.value == 'responded' %}bg-danger{% elif lead.status.value == 'clicked' %}bg-warning text-dark{% elif lead.status.value == 'opened' %}bg-info{% else %}bg-secondary{% endif %}">
+            {{ lead.status.value }}
+          </span>
+          {% if lead.recommended_service %}
+          <span class="badge bg-light text-dark ms-1">{{ lead.recommended_service.value }}</span>
+          {% endif %}
+        </div>
+
+        {% if lead.contact_phone or lead.company_phone %}
+        <div class="mb-2" style="font-size:13px;">
+          <i class="bi bi-telephone text-success"></i>
+          <strong>{{ lead.contact_phone or lead.company_phone }}</strong>
+          {% if lead.contact_name %}<br><small class="text-muted">{{ lead.contact_name }} {{ lead.contact_title or '' }}</small>{% endif %}
+        </div>
+        {% endif %}
+
+        {% if lead.outreach_logs %}
+        {% set latest = lead.outreach_logs | sort(attribute='sent_at', reverse=True) | first %}
+        <div class="mb-2" style="font-size:11px; color:#666;">
+          <i class="bi bi-envelope"></i> 送信: {{ latest.sent_at.strftime('%m/%d') if latest.sent_at else '未送信' }}
+          {% if latest.opened_at %} &nbsp;<span class="text-success">開封済</span>{% endif %}
+          {% if latest.clicked_at %} &nbsp;<span class="text-warning">クリック済</span>{% endif %}
+          {% if latest.responded_at %} &nbsp;<span class="text-danger fw-bold">フォーム回答!</span>{% endif %}
+        </div>
+        {% endif %}
+
+        <a href="/leads/{{ lead.id }}" class="btn btn-sm btn-primary w-100 mt-1">詳細・架電記録</a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+  <div class="card-body text-center py-5 text-muted">
+    <i class="bi bi-inbox" style="font-size:40px;"></i>
+    <p class="mt-3">ホットリードはまだありません。<br>メールを送信して反響を待ちましょう。</p>
+    <a href="/outreach" class="btn btn-primary">メール送信ページへ</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

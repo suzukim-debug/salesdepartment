@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}メール送信 - Sales System{% endblock %}
+{% block content %}
+<h4 class="mb-4"><i class="bi bi-envelope-paper"></i> メール送信管理</h4>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0">送信対象リード（スコア40以上・未送信）</h6>
+      </div>
+      <div class="card-body p-0">
+        {% if targets %}
+        <table class="table table-hover mb-0" style="font-size:13px;">
+          <thead class="table-light"><tr><th>会社名</th><th>スコア</th><th>推奨サービス</th><th>メール</th><th></th></tr></thead>
+          <tbody>
+          {% for lead in targets %}
+          <tr>
+            <td><strong>{{ lead.company_name }}</strong><br><small class="text-muted">{{ lead.industry }}</small></td>
+            <td>
+              <span class="score-badge {% if lead.lead_score >= 70 %}score-high{% else %}score-mid{% endif %}">{{ lead.lead_score }}</span>
+            </td>
+            <td>{{ lead.recommended_service.value if lead.recommended_service else "-" }}</td>
+            <td><small>{{ lead.contact_email }}</small></td>
+            <td>
+              <button class="btn btn-sm btn-outline-primary" onclick="openCompose({{ lead.id }}, '{{ lead.company_name | e }}')">
+                <i class="bi bi-stars"></i> AI作成
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-center py-4 text-muted">送信対象リードがありません</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-robot"></i> メール作成パネル</h6>
+      </div>
+      <div class="card-body">
+        <div id="noSelection" class="text-center text-muted py-3">左のリストから会社を選択してください</div>
+        <div id="composePanel" class="d-none">
+          <div class="mb-2">
+            <small class="text-muted">宛先:</small>
+            <strong id="targetCompany"></strong>
+          </div>
+          <input type="hidden" id="targetLeadId">
+          <div id="generatingIndicator" class="text-center py-3 d-none">
+            <div class="spinner-border spinner-border-sm text-primary"></div>
+            <small class="ms-2 text-muted">AIがメールを生成中...</small>
+          </div>
+          <div id="emailForm" class="d-none">
+            <div class="mb-2">
+              <label class="form-label form-label-sm mb-1">件名</label>
+              <input type="text" id="compSubject" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2">
+              <label class="form-label form-label-sm mb-1">本文（編集可）</label>
+              <textarea id="compBody" class="form-control form-control-sm" rows="8"></textarea>
+            </div>
+            <input type="hidden" id="compBodyHtml">
+            <input type="hidden" id="compServiceType">
+            <div class="d-flex gap-2">
+              <button class="btn btn-primary btn-sm flex-fill" onclick="sendEmail()">
+                <i class="bi bi-send"></i> 送信
+              </button>
+              <button class="btn btn-outline-secondary btn-sm" onclick="openCompose(document.getElementById('targetLeadId').value, document.getElementById('targetCompany').textContent)">
+                <i class="bi bi-arrow-clockwise"></i> 再生成
+              </button>
+            </div>
+            <div id="sendResult" class="mt-2"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 送信履歴 -->
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white border-0 pt-3">
+        <h6 class="mb-0"><i class="bi bi-clock-history"></i> 直近送信履歴</h6>
+      </div>
+      <div class="card-body p-0">
+        {% if sent_logs %}
+        <ul class="list-group list-group-flush" style="font-size:12px;">
+        {% for log in sent_logs %}
+        <li class="list-group-item py-2">
+          <div class="d-flex justify-content-between">
+            <strong>{{ log.lead.company_name if log.lead else "?" }}</strong>
+            <small class="text-muted">{{ log.sent_at.strftime('%m/%d %H:%M') if log.sent_at else '未送信' }}</small>
+          </div>
+          <div class="text-truncate text-muted">{{ log.subject }}</div>
+          <div>
+            {% if log.responded_at %}<span class="badge bg-danger">反響</span>{% endif %}
+            {% if log.clicked_at %}<span class="badge bg-warning text-dark">クリック</span>{% endif %}
+            {% if log.opened_at %}<span class="badge bg-info">開封</span>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+        </ul>
+        {% else %}
+        <div class="text-center text-muted py-3">送信履歴はありません</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function openCompose(leadId, companyName) {
+  document.getElementById("noSelection").classList.add("d-none");
+  document.getElementById("composePanel").classList.remove("d-none");
+  document.getElementById("emailForm").classList.add("d-none");
+  document.getElementById("generatingIndicator").classList.remove("d-none");
+  document.getElementById("targetLeadId").value = leadId;
+  document.getElementById("targetCompany").textContent = companyName;
+
+  const fd = new FormData(); fd.append("lead_id", leadId);
+  const r = await fetch("/outreach/preview", {method:"POST", body:fd});
+  document.getElementById("generatingIndicator").classList.add("d-none");
+
+  if (r.ok) {
+    const d = await r.json();
+    document.getElementById("compSubject").value = d.subject;
+    document.getElementById("compBody").value = d.body;
+    document.getElementById("compBodyHtml").value = d.body_html;
+    document.getElementById("compServiceType").value = d.service_type;
+    document.getElementById("emailForm").classList.remove("d-none");
+  }
+}
+
+async function sendEmail() {
+  const fd = new FormData();
+  fd.append("lead_id", document.getElementById("targetLeadId").value);
+  fd.append("subject", document.getElementById("compSubject").value);
+  fd.append("body", document.getElementById("compBody").value);
+  fd.append("body_html", document.getElementById("compBodyHtml").value);
+  fd.append("service_type", document.getElementById("compServiceType").value || "mixed");
+  const r = await fetch("/outreach/send", {method:"POST", body:fd});
+  const d = await r.json();
+  document.getElementById("sendResult").innerHTML = d.success
+    ? '<div class="alert alert-success py-1 mb-0 small">送信完了！</div>'
+    : `<div class="alert alert-danger py-1 mb-0 small">エラー: ${d.detail}</div>`;
+  if (d.success) setTimeout(() => location.reload(), 2000);
+}
+</script>
+{% endblock %}
