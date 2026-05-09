@@ -431,6 +431,69 @@ async def send_email(
         raise HTTPException(500, str(e))
 
 
+@app.post("/outreach/batch-send")
+async def batch_send(
+    background_tasks: BackgroundTasks,
+    limit: int = Form(10),
+    db: Session = Depends(get_db),
+):
+    """スコア上位N件を自動でAI生成→一括送信"""
+    targets = (
+        db.query(Lead)
+        .filter(
+            Lead.status.in_([LeadStatus.NEW, LeadStatus.RESEARCHED]),
+            Lead.status != LeadStatus.EXCLUDED,
+            Lead.lead_score >= 40,
+            Lead.contact_email.isnot(None),
+        )
+        .order_by(desc(Lead.lead_score))
+        .limit(limit)
+        .all()
+    )
+
+    if not targets:
+        return JSONResponse({"message": "⚠️ 送信対象がありません（スコア40以上・メールアドレス必須）"})
+
+    lead_ids = [l.id for l in targets]
+
+    def _run():
+        from database.db import SessionLocal
+        from outreach.template_generator import generate_email
+        from gmail_integration.sender import send_outreach_via_gmail
+        from database.models import Lead, ServiceType
+        session = SessionLocal()
+        sent = 0
+        errors = 0
+        try:
+            for lead_id in lead_ids:
+                lead = session.query(Lead).filter(Lead.id == lead_id).first()
+                if not lead:
+                    continue
+                try:
+                    email_data = generate_email(lead)
+                    stype = ServiceType(email_data.get("service_type", "mixed"))
+                    send_outreach_via_gmail(
+                        session, lead,
+                        email_data["subject"],
+                        email_data["body"],
+                        email_data.get("body_html", email_data["body"]),
+                        stype,
+                    )
+                    session.commit()
+                    sent += 1
+                    import time; time.sleep(1.5)
+                except Exception as e:
+                    logger.error(f"batch send error [{lead.company_name}]: {e}")
+                    session.rollback()
+                    errors += 1
+        finally:
+            session.close()
+        logger.info(f"一括送信完了: 成功{sent}件 / エラー{errors}件")
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"message": f"✅ {len(lead_ids)}件の一括送信を開始しました（バックグラウンド実行中）"})
+
+
 @app.post("/outreach/save-draft")
 async def save_draft(
     lead_id: int = Form(...),
