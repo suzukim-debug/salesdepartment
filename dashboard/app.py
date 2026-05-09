@@ -179,18 +179,19 @@ async def leads_list(
     request: Request,
     status: Optional[str] = None,
     industry: Optional[str] = None,
-    min_score: Optional[float] = None,
+    min_score: Optional[str] = None,
     search: Optional[str] = None,
     page: int = 1,
     db: Session = Depends(get_db),
 ):
+    min_score_val = float(min_score) if min_score else None
     q = db.query(Lead)
     if status:
         q = q.filter(Lead.status == status)
     if industry:
         q = q.filter(Lead.industry.contains(industry))
-    if min_score is not None and min_score > 0:
-        q = q.filter(Lead.lead_score >= min_score)
+    if min_score_val:
+        q = q.filter(Lead.lead_score >= min_score_val)
     if search:
         q = q.filter(Lead.company_name.contains(search))
 
