@@ -112,7 +112,7 @@ async function importCSV(input, url, label) {
   <ul class="pagination pagination-sm">
     {% for p in range(1, (total_count // per_page) + 2) %}
     <li class="page-item {% if p == page %}active{% endif %}">
-      <a class="page-link" href="?page={{ p }}&status={{ current_status or '' }}&search={{ search or '' }}&min_score={{ min_score }}">{{ p }}</a>
+      <a class="page-link" href="?page={{ p }}&status={{ current_status or '' }}&search={{ search or '' }}&min_score={{ min_score or '' }}">{{ p }}</a>
     </li>
     {% endfor %}
   </ul>
