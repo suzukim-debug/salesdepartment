@@ -37,6 +37,14 @@ def _call_ai(system_msg: str, prompt: str) -> str:
         raise ValueError("ANTHROPIC_API_KEY または GEMINI_API_KEY を .env に設定してください")
 
 
+def _make_intro(sender_name: str) -> str:
+    """'アドリブ株式会社 鈴木' → 'アドリブ株式会社の鈴木'"""
+    parts = sender_name.strip().split()
+    if len(parts) >= 2:
+        return f"{' '.join(parts[:-1])}の{parts[-1]}"
+    return sender_name
+
+
 SERVICE_DESCRIPTIONS = {
     ServiceType.SNS: "SNSアカウント運用代行",
     ServiceType.INFLUENCER: "インフルエンサーキャスティング",
@@ -82,12 +90,12 @@ def _build_prompt_with_sns_diagnosis(lead: Lead, service: ServiceType, diagnosis
     ig_engagement = ig.get("engagement_rate_estimate", "不明") if ig else "不明"
 
     sender_name = settings.gmail_from_name or settings.smtp_from_name or "鈴木"
+    intro = _make_intro(sender_name)
     return f"""あなたはWeb広告代理店の敏腕営業担当者です。
 以下の企業のSNSを実際に調査した結果をもとに、具体的な改善提案を含む初回営業メールを作成してください。
 
 【送信者情報】
-送信者名: {sender_name}
-※ 本文の自己紹介は必ず「{sender_name}と申します。」と書いてください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
+※ 本文冒頭の自己紹介は必ず「突然のご連絡失礼いたします。{intro}と申します。」をそのまま使ってください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
 
 【宛先企業情報】
 - 会社名: {lead.company_name}
@@ -162,12 +170,12 @@ def _build_prompt_basic(lead: Lead, service: ServiceType) -> str:
     ads_status = "・".join(ads_parts) if ads_parts else "デジタル広告未運用"
 
     sender_name = settings.gmail_from_name or settings.smtp_from_name or "鈴木"
+    intro = _make_intro(sender_name)
     return f"""あなたはWeb広告代理店の営業担当者です。
 以下の見込み顧客に対して初回営業メールを作成してください。
 
 【送信者情報】
-送信者名: {sender_name}
-※ 本文の自己紹介は必ず「{sender_name}と申します。」と書いてください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
+※ 本文冒頭の自己紹介は必ず「突然のご連絡失礼いたします。{intro}と申します。」をそのまま使ってください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
 
 【企業情報】
 - 会社名: {lead.company_name}
