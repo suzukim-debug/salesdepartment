@@ -87,7 +87,7 @@ def _build_prompt_with_sns_diagnosis(lead: Lead, service: ServiceType, diagnosis
 
 【送信者情報】
 送信者名: {sender_name}
-※ 本文の自己紹介は必ず「アドリブ株式会社の{sender_name}と申します。」と書いてください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
+※ 本文の自己紹介は必ず「{sender_name}と申します。」と書いてください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
 
 【宛先企業情報】
 - 会社名: {lead.company_name}
@@ -167,7 +167,7 @@ def _build_prompt_basic(lead: Lead, service: ServiceType) -> str:
 
 【送信者情報】
 送信者名: {sender_name}
-※ 本文の自己紹介は必ず「アドリブ株式会社の{sender_name}と申します。」と書いてください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
+※ 本文の自己紹介は必ず「{sender_name}と申します。」と書いてください。[氏名]・〇〇・XXX等のプレースホルダーは絶対に使用禁止。
 
 【企業情報】
 - 会社名: {lead.company_name}
