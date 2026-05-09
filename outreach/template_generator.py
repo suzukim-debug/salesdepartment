@@ -24,13 +24,14 @@ def _call_ai(system_msg: str, prompt: str) -> str:
         )
         return msg.content[0].text.strip()
     elif settings.gemini_api_key:
-        import google.generativeai as genai
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=system_msg,
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(system_instruction=system_msg),
         )
-        response = model.generate_content(prompt)
         return response.text.strip()
     else:
         raise ValueError("ANTHROPIC_API_KEY または GEMINI_API_KEY を .env に設定してください")
